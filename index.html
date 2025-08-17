@@ -18,10 +18,7 @@
     .wrap-anywhere{overflow-wrap:anywhere;word-break:break-word;hyphens:auto}
     .linkish{ color: rgba(255,255,255,.8); font-size: 11px; }
     .linkish:hover{ color: #fff; text-decoration: underline; }
-    .bar { height: 6px; border-radius: 9999px; background: rgba(255,255,255,.08); overflow: hidden; }
-    .bar > div { height: 100%; background: rgba(125, 211, 252, .7); }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body class="min-h-screen">
   <header class="sticky top-0 z-40 glass">
@@ -50,12 +47,12 @@
       <div class="flex flex-col lg:flex-row gap-4 items-start">
         <div class="flex-1 glass rounded-2xl p-5">
           <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight">Search card prices</h1>
-          <p class="text-slate-300/80 mt-1">Live pricing via SportsCardsPro — search player, year, set, or card number. Add cards to your inventory with one click.</p>
+          <p class="text-slate-300/80 mt-1">Live pricing via SportsCardsPro — search player, year, set, or card number. Add to inventory with one click.</p>
           <form id="search-form" class="mt-4 flex items-stretch gap-2">
             <input id="q" name="q" placeholder="e.g., 2017 Patrick Mahomes rookie, 1986 Fleer Jordan #57, 2020 Prizm Burrow" class="flex-1 rounded-xl bg-white/5 border border-white/10 px-4 py-3 outline-none focus:ring-2 focus:ring-sky-400/50" autocomplete="off">
             <button class="rounded-xl px-5 font-semibold bg-sky-400/20 border border-sky-400/40 hover:bg-sky-400/30">Search</button>
           </form>
-          <div id="search-hint" class="text-xs text-slate-300/70 mt-2">Tip: use a card # when possible for best match.</div>
+          <div id="search-hint" class="text-xs text-slate-300/70 mt-2">Tip: include card # for best match.</div>
         </div>
         <aside class="w-full lg:w-80 glass rounded-2xl p-5">
           <div class="flex items-center justify-between gap-2">
@@ -67,9 +64,6 @@
                 <option>Sales</option>
                 <option>Trade</option>
               </select>
-              <button id="toggle-history" class="text-xs rounded-lg px-2 py-1 bg-white/5 border border-white/10 hover:bg-white/10">History</button>
-              <button id="toggle-analytics" class="text-xs rounded-lg px-2 py-1 bg-white/5 border border-white/10 hover:bg-white/10">Analytics</button>
-              <button id="toggle-sets" class="text-xs rounded-lg px-2 py-1 bg-white/5 border border-white/10 hover:bg-white/10">Sets</button>
             </div>
           </div>
           <div class="grid grid-cols-2 gap-3 text-sm mt-2">
@@ -90,72 +84,6 @@
               <div id="stat-pl" class="text-xl font-bold price">$0.00</div>
             </div>
           </div>
-          <div id="history-card" class="mt-3 hidden">
-            <div class="chip rounded-xl p-3">
-              <canvas id="valueChart" height="200"></canvas>
-            </div>
-          </div>
-          <div id="analytics-card" class="mt-3 hidden">
-            <div class="chip rounded-2xl p-3 space-y-3">
-              <div class="grid grid-cols-2 gap-3 text-sm">
-                <div class="chip rounded-xl p-3">
-                  <div class="text-slate-300/70">Market Value</div>
-                  <div id="pnl-market" class="text-xl font-bold price">$0.00</div>
-                </div>
-                <div class="chip rounded-xl p-3">
-                  <div class="text-slate-300/70">Holdings Cost</div>
-                  <div id="pnl-cost" class="text-xl font-bold price">$0.00</div>
-                </div>
-                <div class="chip rounded-xl p-3">
-                  <div class="text-slate-300/70">Unrealized P/L</div>
-                  <div id="pnl-unreal" class="text-xl font-bold price">$0.00</div>
-                </div>
-                <div class="chip rounded-xl p-3">
-                  <div class="text-slate-300/70">Realized P/L</div>
-                  <div id="pnl-real" class="text-xl font-bold price">$0.00</div>
-                </div>
-                <div class="chip rounded-xl p-3 col-span-2">
-                  <div class="text-slate-300/70">ROI (Holdings)</div>
-                  <div id="pnl-roi" class="text-xl font-bold">0.0%</div>
-                </div>
-              </div>
-              <div class="grid grid-cols-1 gap-3">
-                <div class="chip rounded-xl p-3">
-                  <div class="font-semibold text-sm mb-2">Allocation by Set</div>
-                  <canvas id="allocChart" height="200"></canvas>
-                </div>
-                <div class="chip rounded-xl p-3">
-                  <div class="font-semibold text-sm mb-2">Top Winners / Losers</div>
-                  <canvas id="winnersChart" height="220"></canvas>
-                </div>
-              </div>
-              <div class="flex items-center justify-end gap-3 text-xs">
-                <a id="export-ledger" class="linkish cursor-pointer">Export Ledger</a>
-                <a id="import-ledger" class="linkish cursor-pointer">Import Ledger</a>
-                <input id="import-ledger-file" type="file" accept="application/json" class="hidden" />
-              </div>
-            </div>
-          </div>
-          <div id="sets-card" class="mt-3 hidden">
-            <div class="chip rounded-2xl p-3 space-y-2">
-              <div class="flex items-center justify-between">
-                <div class="font-semibold text-sm">Tracked sets</div>
-                <a id="add-set" class="linkish cursor-pointer">+ Add</a>
-              </div>
-              <div id="sets-list" class="space-y-3"></div>
-            </div>
-          </div>
-          <button id="export-json" class="mt-4 w-full rounded-xl bg-white/5 border border-white/10 py-2 hover:bg-white/10">Export JSON</button>
-          <button id="import-json" class="mt-2 w-full rounded-xl bg-white/5 border border-white/10 py-2 hover:bg-white/10">Import JSON</button>
-          <div class="mt-1 flex items-center justify-between">
-            <a id="export-csv" class="linkish cursor-pointer">Export CSV</a>
-            <a id="import-csv" class="linkish cursor-pointer">Import CSV</a>
-          </div>
-          <div class="mt-1 flex items-center justify-end">
-            <a id="csv-template" class="linkish cursor-pointer">CSV Template</a>
-          </div>
-          <input id="import-file" type="file" accept="application/json" class="hidden" />
-          <input id="import-file-csv" type="file" accept=".csv,text/csv" class="hidden" />
         </aside>
       </div>
 

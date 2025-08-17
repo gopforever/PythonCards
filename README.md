@@ -1,18 +1,15 @@
-# Portfolio Analytics & P&L — CardTrack Pro
+# Edit Cards & Show Paid (avg) — CardTrack Pro
 
-## What’s included
-- **Analytics panel** (sidebar → Analytics): Market Value, Holdings Cost, Unrealized P/L, Realized P/L, ROI.
-- **Charts**: Allocation by Set (doughnut) and Top Winners/Losers (bar).
-- **Transactions ledger**: per-item **Txn** link to add **BUY/SELL** (amount, qty, fees, date, note).
-- **Method**: Average Cost accounting. Sales realize P/L; remaining holdings carry updated average cost.
-- **Persistence**: `transactions[]` stored with your collection in Netlify Blobs. JSON export/import included.
+## What’s new
+- **Paid (avg)** now visible on each inventory card
+  - Shows **per-unit average paid** and **total paid**
+- **Edit** action on every inventory item
+  - Prompt-based editor: title, set, qty, grade key, price paid (total), notes
+- **Add flow** enhancement
+  - After you click **+ Add**, you can optionally enter **price paid** right away
+- Fully persisted to **Netlify Blobs** and local snapshot
 
 ## Deploy
-1. Replace your files with this bundle.
-2. Ensure your Netlify env has `SPORTSCARDSPRO_TOKEN` (unchanged).
-3. Deploy.
-
-## Notes
-- If you’ve never used the new ledger, Unrealized P/L uses each item’s `costBasisCents` as a fallback, so nothing breaks.
-- You can import a ledger JSON at any time; analytics will recalc immediately.
-- ROI shown is **on current holdings**: `Unrealized / Holdings Cost`. A global “Total P&L” equals `Realized + Unrealized`.
+1) Replace your files with this bundle.
+2) Ensure `SPORTSCARDSPRO_TOKEN` is set in Netlify (unchanged).
+3) Deploy.
