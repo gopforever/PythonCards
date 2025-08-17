@@ -1,10 +1,10 @@
-/* CardTrack Pro — Set Details View (Owned vs Missing + Quick Add) */
+/* CardTrack Pro — Watchlist Price Alerts */
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 const fmtUSD = (cents) => (cents==null?0:cents/100).toLocaleString(undefined,{style:"currency",currency:"USD"});
 
 const CACHE = { USER:"ctp.user", SNAP_PREF:"ctp.snap.v1." , COLLECTION:"ctp.collection" };
-const state = { user:null, collection:"Personal", inventory:[], watchlist:[], history:[], sets:[], chart:null, expandedSets:{} };
+const state = { user:null, collection:"Personal", inventory:[], watchlist:[], history:[], sets:[], chart:null };
 
 function debounce(fn, ms=600){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
 
@@ -17,11 +17,7 @@ const cloudSave = debounce(async (user, collection, data)=>{
   await fetch(`/.netlify/functions/storage`, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ user, collection, data }) });
 }, 600);
 
-// local snapshot helpers
-function getLocalSnap(col){ try { return JSON.parse(localStorage.getItem(CACHE.SNAP_PREF + col) || "null") || {inventory:[],watchlist:[],history:[],sets:[]}; } catch { return {inventory:[],watchlist:[],history:[],sets:[]}; } }
-function setLocalSnap(col, data){ localStorage.setItem(CACHE.SNAP_PREF + col, JSON.stringify(data)); }
-
-// --- Pricing calc ---
+// --- Totals/History ---
 function estimateItemValue(it){
   const prices = it.prices || {};
   const grade = it.gradeKey || "loose-price";
@@ -47,7 +43,7 @@ function updateStats(){
   $("#stat-cost").textContent = fmtUSD(t.cost);
   $("#stat-pl").textContent = fmtUSD(t.pl);
   renderChart();
-  setLocalSnap(state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history, sets:state.sets });
+  localStorage.setItem(CACHE.SNAP_PREF + state.collection, JSON.stringify({ inventory:state.inventory, watchlist:state.watchlist, history:state.history, sets:state.sets }));
   cloudSave(state.user, state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history, sets:state.sets });
 }
 
@@ -65,14 +61,14 @@ function renderChart(){
   } else { state.chart.data.labels=labels; state.chart.data.datasets[0].data=est; state.chart.data.datasets[1].data=cost; state.chart.update(); }
 }
 
-// --- Search ---
+// --- Search + Add/Watch ---
 function priceKeysDisplay(obj){
   const preferred=["loose-price","graded-price","manual-only-price","new-price","cib-price","bgs-10-price","condition-17-price","condition-18-price"];
   const keys=preferred.filter(k=>obj[k]!=null); Object.keys(obj).forEach(k=>{ if (/-price$/.test(k) && !keys.includes(k)) keys.push(k); }); return keys;
 }
 const GRADE_LABEL = (k) => {
   const map = { "loose-price":"Loose", "graded-price":"Graded", "new-price":"New", "cib-price":"CIB", "manual-only-price":"Manual", "bgs-10-price":"BGS 10", "condition-17-price":"Cond 17", "condition-18-price":"Cond 18" };
-  return map[k] || k.replace(/-/g," ").replace(/\b\w/g, s=>s.toUpperCase());
+  return map[k] || k.replace(/-/g," ").replace(/\w/g, s=>s.toUpperCase());
 };
 
 async function doSearch(q){
@@ -89,12 +85,13 @@ function renderResults(products){
     const keys = priceKeysDisplay(p);
     const priceRows = keys.map(k=>`<div class="flex items-center justify-between text-sm"><div class="text-slate-300/80">${k.replace(/-/g," ")}</div><div class="font-semibold price">${fmtUSD(p[k])}</div></div>`).join("");
     const card=document.createElement("div"); card.className="glass rounded-2xl p-4";
-    const trackSetLink = p["console-name"] ? `<a class="linkish cursor-pointer" data-track-set="${p["console-name"].replace(/\"/g,'&quot;')}">☆ Track Set</a>` : "";
+    const trackSetLink = p["console-name"] ? `<a class="linkish cursor-pointer" data-track-set="${p["console-name"].replace(/"/g,'&quot;')}">☆ Track Set</a>` : "";
     card.innerHTML=`
       <div class="flex items-start justify-between gap-3 min-w-0">
         <div class="min-w-0"><div class="text-sm text-slate-300/70 wrap-anywhere">${p["console-name"]||""}</div><div class="font-semibold wrap-anywhere">${p["product-name"]||""}</div></div>
         <div class="shrink-0 flex items-center gap-3">
           ${trackSetLink}
+          <a class="linkish cursor-pointer" data-watch='${JSON.stringify({id:p.id,name:p["product-name"],set:p["console-name"]}).replaceAll("'","&apos;")}'>★ Watch</a>
           <button class="rounded-lg px-3 py-1 bg-sky-400/20 border border-sky-400/40 text-sm hover:bg-sky-400/30" data-id="${p.id}" data-json='${JSON.stringify(p).replaceAll("'","&apos;")}'>
             + Add
           </button>
@@ -109,15 +106,18 @@ function renderResults(products){
       const inv = { id:data.id, productName:data["product-name"], setName:data["console-name"],
         prices:Object.fromEntries(Object.entries(data).filter(([k])=>/-price$/.test(k)||["loose-price","new-price","graded-price","cib-price","manual-only-price","bgs-10-price","condition-17-price","condition-18-price"].includes(k))),
         qty:1, costBasisCents:0, note:"", gradeKey:"loose-price" };
-      state.inventory.push(inv); logDailySnapshot(); updateStats(); renderInventory(); renderSets();
+      state.inventory.push(inv); logDailySnapshot(); updateStats(); renderInventory();
     });
   });
-  container.querySelectorAll("[data-track-set]").forEach(a => {
-    a.addEventListener("click", async ()=>{
-      const setName = a.getAttribute("data-track-set");
-      await addOrRefreshSet(setName, true);
-    });
-  });
+  container.querySelectorAll("[data-track-set]").forEach(a => a.addEventListener("click", async ()=>{
+    const setName = a.getAttribute("data-track-set"); /* optional: implement if sets available */
+  }));
+  container.querySelectorAll("[data-watch]").forEach(a => a.addEventListener("click", ()=>{
+    const info = JSON.parse(a.getAttribute("data-watch").replaceAll("&apos;","'"));
+    if (state.watchlist.some(w => String(w.id)===String(info.id))) { alert("Already on watchlist"); return; }
+    state.watchlist.push({ id: info.id, productName: info.name, setName: info.set, prices:{}, alerts: { priceKey:"loose-price" } });
+    updateStats(); renderWatchlist();
+  }));
 }
 
 // --- Inventory UI ---
@@ -125,7 +125,7 @@ function renderInventory(){
   const list=$("#inventory-list"); list.innerHTML="";
   if (!state.inventory.length){ list.innerHTML=`<div class="col-span-full text-slate-300/80">No items in ${state.collection}. Use search to add cards.</div>`; return; }
   state.inventory.forEach((it, idx)=>{
-    const keys = priceKeysDisplay(it.prices);
+    const keys = priceKeysDisplay(it.prices||{});
     const gradeOptions = keys.map(k=>`<option value="${k}" ${k===it.gradeKey?"selected":""}>${GRADE_LABEL(k)}</option>`).join("");
     const row=document.createElement("div"); row.className="glass rounded-2xl p-4";
     row.innerHTML=`
@@ -136,7 +136,7 @@ function renderInventory(){
       <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
         <label class="chip rounded-xl px-3 py-2 flex items-center gap-2 overflow-hidden">
           <span class="text-slate-300/70">Qty</span>
-          <input type="number" min="1" value="${it.qty}" data-field="qty" class="bg-transparent w-20 outline-none">
+          <input type="number" min="1" value="${it.qty||1}" data-field="qty" class="bg-transparent w-20 outline-none">
         </label>
         <label class="chip rounded-xl px-3 py-2 flex items-center gap-2 overflow-hidden">
           <span class="text-slate-300/70">Grade</span>
@@ -154,366 +154,140 @@ function renderInventory(){
       <textarea placeholder="Notes (purchase details, cert #, comps)" data-field="note" class="mt-3 w-full chip rounded-xl px-3 py-2 bg-transparent outline-none wrap-anywhere">${it.note||""}</textarea>`;
     list.appendChild(row);
 
-    row.querySelector('[data-field="qty"]').addEventListener("input",(e)=>{ it.qty=Number(e.target.value||1); logDailySnapshot(); updateStats(); renderInventory(); renderSets(); });
+    row.querySelector('[data-field="qty"]').addEventListener("input",(e)=>{ it.qty=Number(e.target.value||1); logDailySnapshot(); updateStats(); renderInventory(); });
     row.querySelector('[data-field="grade"]').addEventListener("change",(e)=>{ it.gradeKey=e.target.value; logDailySnapshot(); updateStats(); renderInventory(); });
     row.querySelector('[data-field="cost"]').addEventListener("input",(e)=>{ it.costBasisCents=Math.round(Number(e.target.value||0)*100); logDailySnapshot(); updateStats(); renderInventory(); });
     row.querySelector('[data-field="note"]').addEventListener("input",(e)=>{ it.note=e.target.value||""; updateStats(); });
-    row.querySelector('[data-action="remove"]').addEventListener("click",()=>{ state.inventory.splice(idx,1); logDailySnapshot(); updateStats(); renderInventory(); renderSets(); });
+    row.querySelector('[data-action="remove"]').addEventListener("click",()=>{ state.inventory.splice(idx,1); logDailySnapshot(); updateStats(); renderInventory(); });
   });
 }
 
-// --- Sets (with details) ---
-async function fetchSetChecklist(setName){
-  const r = await fetch(`/.netlify/functions/setlist?q=${encodeURIComponent(setName)}`);
-  if (!r.ok) throw new Error("setlist fetch failed");
-  return await r.json();
-}
-async function fetchProductById(id){
-  const r = await fetch(`/.netlify/functions/prices?type=product&id=${encodeURIComponent(id)}`);
-  if (!r.ok) throw new Error("product fetch failed");
-  return await r.json();
-}
-async function addOrRefreshSet(setName, showAlert=false){
-  if (!setName) return;
-  try{
-    const data = await fetchSetChecklist(setName);
-    if (!data || !Array.isArray(data.cards) || data.cards.length===0){ if(showAlert) alert("No checklist found for that set."); return; }
-    let s = state.sets.find(x => (x.title||x.key) === setName);
-    if (!s){
-      s = { key: setName, title: setName, total: data.total||data.cards.length, cards: data.cards, lastSync: new Date().toISOString() };
-      state.sets.push(s);
-    } else {
-      s.cards = data.cards; s.total = data.total||data.cards.length; s.lastSync = new Date().toISOString();
-    }
-    updateStats(); renderSets(); if (showAlert) alert(`Tracking set: ${setName}`);
-  } catch(e){ console.warn(e); if (showAlert) alert("Failed to load set checklist."); }
-}
-function computeOwnedForSet(s){
-  const ids = new Set(state.inventory.map(it => it.id));
-  let owned = 0;
-  for (const c of (s.cards||[])){ if (ids.has(c.id)) owned++; }
-  return { owned, total: s.total || (s.cards?.length||0) };
-}
-function makeSetDetailsHTML(s, start=0, batch=20){
-  const invIds = new Set(state.inventory.map(it => it.id));
-  const owned = (s.cards||[]).filter(c => invIds.has(c.id));
-  const missing = (s.cards||[]).filter(c => !invIds.has(c.id));
-  const slice = (arr) => arr.slice(start, start+batch);
-  const ownSlice = slice(owned);
-  const missSlice = slice(missing);
-  const missIdsCSV = missSlice.map(m=>m.id).join(",");
+// --- Watchlist UI + Alert Config ---
+function renderWatchlist(){
+  const list=$("#watch-list"); list.innerHTML="";
+  if (!state.watchlist.length){ list.innerHTML=`<div class="col-span-full text-slate-300/80">No watchlist items. Use <span class="underline">★ Watch</span> on results.</div>`; return; }
+  state.watchlist.forEach((w, idx)=>{
+    const ruleChips = [];
+    if (w.alerts?.belowCents!=null) ruleChips.push(`≤ ${fmtUSD(w.alerts.belowCents)}`);
+    if (w.alerts?.aboveCents!=null) ruleChips.push(`≥ ${fmtUSD(w.alerts.aboveCents)}`);
+    if (w.alerts?.dropPct!=null) ruleChips.push(`↓ ${Math.abs(w.alerts.dropPct)}%`);
+    if (w.alerts?.risePct!=null) ruleChips.push(`↑ ${Math.abs(w.alerts.risePct)}%`);
+    if (w.alerts?.buyCents!=null) ruleChips.push(`Buy ${fmtUSD(w.alerts.buyCents)}`);
+    if (w.alerts?.hi52) ruleChips.push(`52w High`);
+    if (w.alerts?.lo52) ruleChips.push(`52w Low`);
+    const chipsHTML = ruleChips.map(t=>`<span class="chip rounded-lg px-2 py-0.5">${t}</span>`).join(" ");
 
-  const li = (c, own=false) => `<div class="flex items-center justify-between gap-2 text-xs">
-    <div class="min-w-0 wrap-anywhere">${c.number?`#${c.number} — `:""}${c.name}</div>
-    ${own ? `<span class="text-emerald-300/80">Owned</span>` : `<a class="linkish cursor-pointer" data-action="add-one" data-id="${c.id}">Add</a>`}
-  </div>`;
-
-  return `
-    <div class="mt-2 rounded-xl bg-white/5 border border-white/10 p-3 space-y-3">
-      <div class="flex items-center justify-between">
-        <div class="text-xs text-slate-300/70">Showing ${start+1}-${Math.min(start+batch, Math.max(owned.length, missing.length))} of ${Math.max(owned.length, missing.length)} per list</div>
-        <div class="flex items-center gap-2">
-          ${missSlice.length ? `<button class="text-xs rounded-lg px-2 py-1 bg-sky-400/20 border border-sky-400/40 hover:bg-sky-400/30" data-action="add-visible" data-ids="${missIdsCSV}">Add all visible missing</button>` : ""}
-          ${(start+batch) < Math.max(owned.length, missing.length) ? `<a class="linkish cursor-pointer" data-action="more" data-next="${start+batch}">Show more</a>` : ""}
+    const row=document.createElement("div"); row.className="glass rounded-2xl p-4";
+    const priceKey = w.alerts?.priceKey || "loose-price";
+    row.innerHTML=`
+      <div class="flex items-start justify-between gap-3 min-w-0">
+        <div class="min-w-0">
+          <div class="text-sm text-slate-300/70 wrap-anywhere">${w.setName||""}</div>
+          <div class="font-semibold wrap-anywhere">${w.productName||""}</div>
+          <div class="mt-2 flex flex-wrap gap-2">${chipsHTML || '<span class="text-xs text-slate-300/70">No rules set.</span>'}</div>
+        </div>
+        <div class="shrink-0 flex items-center gap-3">
+          <a class="linkish cursor-pointer" data-action="alerts">Alerts</a>
+          <button class="text-slate-300/80 hover:text-red-300" data-action="remove" title="Remove">✖</button>
         </div>
       </div>
-      <div class="grid grid-cols-2 gap-3">
-        <div>
-          <div class="font-medium text-sm mb-1">Owned (${owned.length})</div>
-          <div class="space-y-1">${ownSlice.map(c=>li(c,true)).join("") || `<div class="text-xs text-slate-300/70">None yet</div>`}</div>
-        </div>
-        <div>
-          <div class="font-medium text-sm mb-1">Missing (${missing.length})</div>
-          <div class="space-y-1">${missSlice.map(c=>li(c,false)).join("") || `<div class="text-xs text-slate-300/70">All caught up 🎉</div>`}</div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-function renderSets(){
-  const wrap = $("#sets-list"); if (!wrap) return;
-  wrap.innerHTML = "";
-  if (!state.sets.length){ wrap.innerHTML = `<div class="text-slate-300/80 text-sm">No sets yet. Click <span class="underline">+ Add</span> or use “☆ Track Set” on a search result.</div>`; return; }
-  state.sets.forEach((s, idx)=>{
-    const {owned, total} = computeOwnedForSet(s);
-    const pct = total ? Math.round((owned / total) * 100) : 0;
-    const row = document.createElement("div");
-    const isOpen = !!state.expandedSets[s.title];
-    row.innerHTML = `
-      <div class="space-y-2">
-        <div class="flex items-center justify-between gap-2">
-          <div class="min-w-0 flex items-center gap-2">
-            <button class="text-xs rounded-md px-2 py-1 bg-white/5 border border-white/10 hover:bg-white/10" data-action="toggle">${isOpen ? "▾" : "▸"}</button>
-            <div>
-              <div class="font-medium text-sm wrap-anywhere">${s.title}</div>
-              <div class="text-xs text-slate-300/70">${owned}/${total} • ${pct}%</div>
-            </div>
-          </div>
-          <div class="flex items-center gap-3 shrink-0">
-            <a class="linkish cursor-pointer" data-action="refresh">Sync</a>
-            <a class="linkish cursor-pointer" data-action="remove">Remove</a>
-          </div>
-        </div>
-        <div class="bar"><div style="width:${pct}%;"></div></div>
-        <div class="details ${isOpen ? "" : "hidden"}" data-start="0"></div>
-      </div>
+      <div class="mt-3 text-xs text-slate-300/70">Price key: <span class="font-medium">${priceKey}</span></div>
     `;
-    wrap.appendChild(row);
+    list.appendChild(row);
 
-    const details = row.querySelector(".details");
-    if (isOpen){ details.innerHTML = makeSetDetailsHTML(s, Number(details.getAttribute("data-start"))||0, 20); }
+    row.querySelector('[data-action="remove"]').addEventListener("click",()=>{ state.watchlist.splice(idx,1); updateStats(); renderWatchlist(); });
+    row.querySelector('[data-action="alerts"]').addEventListener("click",()=>{
+      const key = prompt("Price key to track (loose-price, graded-price, new-price, etc):", w.alerts?.priceKey || "loose-price");
+      if (key===null) return;
+      const below = prompt("Alert when price ≤ (USD). Leave blank to skip.", w.alerts?.belowCents!=null ? (w.alerts.belowCents/100).toFixed(2) : "");
+      const above = prompt("Alert when price ≥ (USD). Leave blank to skip.", w.alerts?.aboveCents!=null ? (w.alerts.aboveCents/100).toFixed(2) : "");
+      const drop = prompt("Alert on drop ≥ % (e.g., 10). Leave blank to skip.", w.alerts?.dropPct!=null ? String(Math.abs(w.alerts.dropPct)) : "");
+      const rise = prompt("Alert on rise ≥ % (e.g., 10). Leave blank to skip.", w.alerts?.risePct!=null ? String(Math.abs(w.alerts.risePct)) : "");
+      const buy = prompt("Track to Buy Price (USD). Alert when ≤ this. Leave blank to skip.", w.alerts?.buyCents!=null ? (w.alerts.buyCents/100).toFixed(2) : "");
+      const hi52 = confirm("Alert on new 52-week HIGH? OK=yes, Cancel=no");
+      const lo52 = confirm("Alert on new 52-week LOW? OK=yes, Cancel=no");
 
-    row.querySelector('[data-action="toggle"]').addEventListener("click", ()=>{
-      const open = !state.expandedSets[s.title];
-      state.expandedSets[s.title] = open;
-      renderSets();
-    });
-    row.querySelector('[data-action="refresh"]').addEventListener("click", ()=> addOrRefreshSet(s.title, true));
-    row.querySelector('[data-action="remove"]').addEventListener("click", ()=>{ state.sets.splice(idx,1); updateStats(); renderSets(); });
-
-    row.addEventListener("click", async (e)=>{
-      const t = e.target;
-      if (!(t instanceof HTMLElement)) return;
-      if (t.dataset.action === "more"){
-        const next = Number(t.dataset.next)||0;
-        details.setAttribute("data-start", String(next));
-        details.innerHTML = makeSetDetailsHTML(s, next, 20);
-      }
-      if (t.dataset.action === "add-one"){
-        const id = t.dataset.id;
-        if (!id) return;
-        try{
-          t.textContent = "Adding…"; t.classList.add("pointer-events-none","opacity-60");
-          const p = await fetchProductById(id);
-          const data = p.products ? p.products[0] : p; // handle either single or array shape
-          if (data && data.id){
-            const inv = { id:data.id, productName:data["product-name"], setName:data["console-name"],
-              prices:Object.fromEntries(Object.entries(data).filter(([k])=>/-price$/.test(k)||["loose-price","new-price","graded-price","cib-price","manual-only-price","bgs-10-price","condition-17-price","condition-18-price"].includes(k))),
-              qty:1, costBasisCents:0, note:"", gradeKey:"loose-price" };
-            state.inventory.push(inv); logDailySnapshot(); updateStats(); renderInventory(); renderSets();
-          } else { alert("Could not fetch product details."); }
-        } catch(e){ console.warn(e); alert("Failed to add item."); }
-      }
-      if (t.dataset.action === "add-visible"){
-        const ids = (t.dataset.ids||"").split(",").filter(Boolean);
-        t.textContent = "Adding…"; t.classList.add("pointer-events-none","opacity-60");
-        for (const id of ids){
-          try{
-            const p = await fetchProductById(id);
-            const data = p.products ? p.products[0] : p;
-            if (data && data.id){
-              const inv = { id:data.id, productName:data["product-name"], setName:data["console-name"],
-                prices:Object.fromEntries(Object.entries(data).filter(([k])=>/-price$/.test(k)||["loose-price","new-price","graded-price","cib-price","manual-only-price","bgs-10-price","condition-17-price","condition-18-price"].includes(k))),
-                qty:1, costBasisCents:0, note:"", gradeKey:"loose-price" };
-              // avoid duplicates by id in this collection
-              if (!state.inventory.some(it => String(it.id)===String(data.id))) state.inventory.push(inv);
-            }
-          } catch {}
-        }
-        logDailySnapshot(); updateStats(); renderInventory(); renderSets();
-      }
+      w.alerts = {
+        priceKey: (key||"loose-price").trim(),
+        belowCents: below ? Math.round(Number(below)*100) : null,
+        aboveCents: above ? Math.round(Number(above)*100) : null,
+        dropPct: drop ? Math.abs(Number(drop)) : null,
+        risePct: rise ? Math.abs(Number(rise)) : null,
+        buyCents: buy ? Math.round(Number(buy)*100) : null,
+        hi52, lo52
+      };
+      updateStats(); renderWatchlist();
     });
   });
 }
 
-// --- CSV helpers ---
-const CSV_HEADERS = ["id","productName","setName","qty","gradeKey","costBasis","loose-price","graded-price","new-price","cib-price","manual-only-price","bgs-10-price","condition-17-price","condition-18-price","note"];
-function toCSVValue(v){ if (v == null) return ""; const s = String(v); if (/[\",\\n]/.test(s)) return `"${s.replace(/"/g,'""')}"`; return s; }
-function buildCSV(rows){ const lines = []; lines.push(CSV_HEADERS.join(",")); for (const r of rows){ const vals = CSV_HEADERS.map(h => toCSVValue(r[h])); lines.push(vals.join(",")); } return lines.join("\\n"); }
-function parseCSV(text){
-  const rows = []; let i=0, field="", row=[], inQuotes=false;
-  function pushField(){ row.push(field); field=""; }
-  function pushRow(){ rows.push(row); row=[]; }
-  while (i < text.length){
-    const c = text[i];
-    if (inQuotes){
-      if (c === '"'){ if (text[i+1] === '"'){ field+='"'; i+=2; } else { inQuotes=false; i++; } }
-      else { field += c; i++; }
-    } else {
-      if (c === '"'){ inQuotes=true; i++; }
-      else if (c === ','){ pushField(); i++; }
-      else if (c === '\\n' || c === '\\r'){ if (c==='\\r' && text[i+1]==='\\n') i++; pushField(); pushRow(); i++; }
-      else { field += c; i++; }
-    }
-  }
-  pushField(); pushRow();
-  const header = rows.shift() || [];
-  const objs = rows.filter(r => r.some(x => x && x.trim().length)).map(r => { const o = {}; header.forEach((h,idx)=>{ o[h] = r[idx] ?? ""; }); return o; });
-  return { header, rows: objs };
+// --- Alerts Panel ---
+async function fetchAlerts(){
+  const r = await fetch(`/.netlify/functions/alerts?user=${encodeURIComponent(state.user)}`);
+  if (!r.ok) return { unread:0, items:[] };
+  return await r.json();
 }
-function inventoryToCSVRows(){
-  return state.inventory.map(it => ({
-    id: it.id || "",
-    productName: it.productName || "",
-    setName: it.setName || "",
-    qty: it.qty ?? 1,
-    gradeKey: it.gradeKey || "loose-price",
-    costBasis: ((it.costBasisCents||0)/100).toFixed(2),
-    "loose-price": it.prices?.["loose-price"] ?? "",
-    "graded-price": it.prices?.["graded-price"] ?? "",
-    "new-price": it.prices?.["new-price"] ?? "",
-    "cib-price": it.prices?.["cib-price"] ?? "",
-    "manual-only-price": it.prices?.["manual-only-price"] ?? "",
-    "bgs-10-price": it.prices?.["bgs-10-price"] ?? "",
-    "condition-17-price": it.prices?.["condition-17-price"] ?? "",
-    "condition-18-price": it.prices?.["condition-18-price"] ?? "",
-    note: it.note || ""
-  }));
+async function clearAlerts(){
+  await fetch(`/.netlify/functions/alerts`, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ action:"clear", user: state.user }) });
 }
-function csvRowsToInventory(objs){
-  const inv = [];
-  for (const o of objs){
-    const prices = {
-      "loose-price": numOrNull(o["loose-price"]),
-      "graded-price": numOrNull(o["graded-price"]),
-      "new-price": numOrNull(o["new-price"]),
-      "cib-price": numOrNull(o["cib-price"]),
-      "manual-only-price": numOrNull(o["manual-only-price"]),
-      "bgs-10-price": numOrNull(o["bgs-10-price"]),
-      "condition-17-price": numOrNull(o["condition-17-price"]),
-      "condition-18-price": numOrNull(o["condition-18-price"]),
-    };
-    Object.keys(prices).forEach(k=>{ if (prices[k]==null || prices[k]==="") delete prices[k]; });
-    inv.push({
-      id: o.id || "",
-      productName: o.productName || "",
-      setName: o.setName || "",
-      prices,
-      qty: Number(o.qty || 1),
-      costBasisCents: Math.round(Number(o.costBasis || 0) * 100),
-      note: o.note || "",
-      gradeKey: (o.gradeKey || "loose-price")
-    });
+function renderAlertsPanel(data){
+  const badge = $("#alert-badge");
+  if (data.unread>0){ badge.classList.remove("hidden"); badge.textContent = String(data.unread); } else { badge.classList.add("hidden"); }
+  const list = $("#alerts-list"); list.innerHTML="";
+  if (!data.items?.length){ list.innerHTML = `<div class="text-slate-300/80">No alerts yet.</div>`; return; }
+  for (const n of data.items.slice(0,50)){
+    const div = document.createElement("div"); div.className="chip rounded-xl p-2";
+    const price = (n.priceCents!=null) ? `<span class="price font-semibold">${fmtUSD(n.priceCents)}</span>` : "";
+    div.innerHTML = `<div class="flex items-start justify-between gap-2">
+      <div class="min-w-0">
+        <div class="font-medium text-xs wrap-anywhere">${n.name || n.type}</div>
+        <div class="text-xs text-slate-300/80">${n.message||""} ${price}</div>
+        <div class="text-[10px] text-slate-400 mt-0.5">${new Date(n.ts).toLocaleString()}</div>
+      </div>
+      <span class="text-[10px] text-slate-400">${n.collection||""}</span>
+    </div>`;
+    list.appendChild(div);
   }
-  return inv;
-}
-function numOrNull(v){ if (v==null || v==="") return null; const n = Number(v); return Number.isFinite(n) ? Math.round(n) : null; }
-
-function buildTemplateCSV(includeExample){
-  const rows = [];
-  if (includeExample){
-    rows.push({
-      id: "12345",
-      productName: "2017 Prizm Patrick Mahomes #269 Rookie",
-      setName: "Football > 2017 Panini Prizm",
-      qty: 1,
-      gradeKey: "graded-price",
-      costBasis: "250.00",
-      "loose-price": "",
-      "graded-price": 32500,
-      "new-price": "",
-      "cib-price": "",
-      "manual-only-price": "",
-      "bgs-10-price": "",
-      "condition-17-price": "",
-      "condition-18-price": "",
-      note: "PSA 10; bought at show"
-    });
-  }
-  return buildCSV(rows);
 }
 
-// --- Wire ---
 document.addEventListener("DOMContentLoaded", async ()=>{
   state.user = localStorage.getItem(CACHE.USER) || "guest";
   localStorage.setItem(CACHE.USER, state.user);
   state.collection = localStorage.getItem(CACHE.COLLECTION) || "Personal";
   $("#collection-select").value = state.collection;
 
-  try {
-    const snap = getLocalSnap(state.collection);
-    state.inventory=snap.inventory||[]; state.watchlist=snap.watchlist||[]; state.history=snap.history||[]; state.sets=snap.sets||[];
+  try { const snap = JSON.parse(localStorage.getItem(CACHE.SNAP_PREF + state.collection) || "null"); if (snap){ state.inventory=snap.inventory||[]; state.watchlist=snap.watchlist||[]; state.history=snap.history||[]; state.sets=snap.sets||[]; } } catch {}
+
+  try { const cloud = await cloudLoad(state.user, state.collection);
+    if (cloud){ state.inventory = Array.isArray(cloud.inventory)?cloud.inventory:[]; state.watchlist = Array.isArray(cloud.watchlist)?cloud.watchlist:[]; state.history = Array.isArray(cloud.history)?cloud.history:[]; state.sets = Array.isArray(cloud.sets)?cloud.sets:[]; }
   } catch {}
 
-  try {
-    const cloud = await cloudLoad(state.user, state.collection);
-    if (cloud){
-      state.inventory = Array.isArray(cloud.inventory) ? cloud.inventory : [];
-      state.watchlist = Array.isArray(cloud.watchlist) ? cloud.watchlist : [];
-      state.history = Array.isArray(cloud.history) ? cloud.history : [];
-      state.sets = Array.isArray(cloud.sets) ? cloud.sets : [];
-    }
-  } catch(e){ console.warn("Cloud load failed", e); }
-
-  updateStats(); renderInventory(); renderSets();
+  updateStats(); renderInventory(); renderWatchlist();
 
   $("#collection-select").addEventListener("change", async (e)=>{
     state.collection = e.target.value || "Personal";
     localStorage.setItem(CACHE.COLLECTION, state.collection);
-    try{
-      const snap = getLocalSnap(state.collection);
-      state.inventory=snap.inventory||[]; state.watchlist=snap.watchlist||[]; state.history=snap.history||[]; state.sets=snap.sets||[];
-    } catch { state.inventory=[]; state.watchlist=[]; state.history=[]; state.sets=[]; }
-    updateStats(); renderInventory(); renderSets();
-    try {
-      const cloud = await cloudLoad(state.user, state.collection);
-      if (cloud){
-        state.inventory = Array.isArray(cloud.inventory) ? cloud.inventory : [];
-        state.watchlist = Array.isArray(cloud.watchlist) ? cloud.watchlist : [];
-        state.history = Array.isArray(cloud.history) ? cloud.history : [];
-        state.sets = Array.isArray(cloud.sets) ? cloud.sets : [];
-        updateStats(); renderInventory(); renderSets();
-      }
-    } catch(e){ console.warn("Cloud load failed", e); }
+    try{ const snap = JSON.parse(localStorage.getItem(CACHE.SNAP_PREF + state.collection) || "null") || {}; state.inventory=snap.inventory||[]; state.watchlist=snap.watchlist||[]; state.history=snap.history||[]; state.sets=snap.sets||[]; } catch { state.inventory=[]; state.watchlist=[]; state.history=[]; state.sets=[]; }
+    updateStats(); renderInventory(); renderWatchlist();
+    try { const cloud = await cloudLoad(state.user, state.collection);
+      if (cloud){ state.inventory = Array.isArray(cloud.inventory)?cloud.inventory:[]; state.watchlist = Array.isArray(cloud.watchlist)?cloud.watchlist:[]; state.history = Array.isArray(cloud.history)?cloud.history:[]; state.sets = Array.isArray(cloud.sets)?cloud.sets:[]; updateStats(); renderInventory(); renderWatchlist(); }
+    } catch {}
   });
 
   $("#search-form").addEventListener("submit",(e)=>{ e.preventDefault(); const q=$("#q").value.trim(); if(q) doSearch(q); });
 
-  $("#export-json").addEventListener("click",()=>{
-    const blob=new Blob([JSON.stringify({inventory:state.inventory,watchlist:state.watchlist,history:state.history,sets:state.sets},null,2)],{type:"application/json"});
-    const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`cardtrack_pro_export_${state.collection}.json`; a.click(); URL.revokeObjectURL(url);
+  const panel = $("#alerts-panel"); const btn = $("#open-alerts");
+  btn.addEventListener("click", async ()=>{
+    panel.classList.toggle("hidden");
+    if (!panel.classList.contains("hidden")){
+      const data = await fetchAlerts(); renderAlertsPanel(data);
+      await fetch(`/.netlify/functions/alerts`, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ action:"ack", user: state.user }) });
+      const refreshed = await fetchAlerts(); renderAlertsPanel(refreshed);
+    }
   });
-  $("#import-json").addEventListener("click",()=>$("#import-file").click());
-  $("#import-file").addEventListener("change", async (e)=>{
-    const file=e.target.files?.[0]; if(!file) return;
-    try{ const text=await file.text(); const obj=JSON.parse(text);
-      if(Array.isArray(obj.inventory)) state.inventory=obj.inventory;
-      if(Array.isArray(obj.watchlist)) state.watchlist=obj.watchlist;
-      if(Array.isArray(obj.history)) state.history=obj.history;
-      if(Array.isArray(obj.sets)) state.sets=obj.sets;
-      logDailySnapshot(); updateStats(); renderInventory(); renderSets();
-      await cloudSave(state.user, state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history, sets:state.sets });
-    } catch { alert("Failed to import JSON"); }
-  });
+  $("#clear-alerts").addEventListener("click", async ()=>{ await clearAlerts(); const data = await fetchAlerts(); renderAlertsPanel(data); });
+  $("#refresh-alerts").addEventListener("click", async ()=>{ const data = await fetchAlerts(); renderAlertsPanel(data); });
 
-  $("#export-csv").addEventListener("click",()=>{
-    const rows = inventoryToCSVRows();
-    const csv = buildCSV(rows);
-    const blob = new Blob([csv], { type:"text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`cardtrack_pro_inventory_${state.collection}.csv`; a.click(); URL.revokeObjectURL(url);
-  });
-  $("#import-csv").addEventListener("click",()=>$("#import-file-csv").click());
-  $("#import-file-csv").addEventListener("change", async (e)=>{
-    const file=e.target.files?.[0]; if(!file) return;
-    try{
-      const text = await file.text();
-      const parsed = parseCSV(text);
-      const need = ["productName","setName","qty","gradeKey","costBasis","note"];
-      const missing = need.filter(h => !parsed.header.includes(h));
-      if (missing.length){ alert("Missing CSV headers: " + missing.join(", ")); return; }
-      const inv = csvRowsToInventory(parsed.rows);
-      state.inventory = inv;
-      logDailySnapshot(); updateStats(); renderInventory(); renderSets();
-      await cloudSave(state.user, state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history, sets:state.sets });
-    } catch(err){ console.error(err); alert("Failed to import CSV"); }
-  });
-
-  $("#csv-template").addEventListener("click",()=>{
-    const includeExample = confirm("Include a sample example row?");
-    const csv = buildTemplateCSV(includeExample);
-    const blob = new Blob([csv], { type:"text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="cardtrack_pro_template.csv"; a.click(); URL.revokeObjectURL(url);
-  });
-
-  $("#toggle-history")?.addEventListener("click",()=>{
-    const card=$("#history-card"); if (!card) return; card.classList.toggle("hidden"); if (!card.classList.contains("hidden")) renderChart();
-  });
-  $("#toggle-sets")?.addEventListener("click",()=>{
-    const card=$("#sets-card"); if (!card) return; card.classList.toggle("hidden"); if (!card.classList.contains("hidden")) renderSets();
-  });
-  $("#add-set")?.addEventListener("click", async ()=>{
-    const q = prompt("Enter a set name exactly as shown in results (e.g., 'Football > 2017 Panini Prizm')");
-    if (!q) return;
-    await addOrRefreshSet(q, true);
-  });
+  $("#toggle-history")?.addEventListener("click",()=>{ const card=$("#history-card"); if (!card) return; card.classList.toggle("hidden"); if (!card.classList.contains("hidden")) renderChart(); });
+  $("#toggle-sets")?.addEventListener("click",()=>{ const card=$("#sets-card"); if (!card) return; card.classList.toggle("hidden"); });
 });

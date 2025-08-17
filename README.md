@@ -1,11 +1,20 @@
-# CardTrack Pro — Set Completion Tracker
+# Watchlist Price Alerts — CardTrack Pro
 
-Drop-in feature:
-- Toggle **Sets** panel in the sidebar to see progress bars.
-- Click **+ Add** to create a tracked set (uses SportsCardsPro products search).
-- Or use **☆ Track Set** on any search result to add its set.
-- Progress is computed by comparing set product IDs to your inventory IDs.
-- Data persists with your **user + collection** in Netlify Blobs.
+## Features
+- Per-card alert rules: **≤ below**, **≥ above**, **% drop/rise**, **52-week high/low**, **Buy price**
+- In-app **bell** with unread count, notifications panel, refresh & clear
+- **Scheduled functions**:
+  - `alerts_scan` — runs every 30 minutes, checks all watchlist items
+  - `alerts_digest` — daily summary
 
-## Netlify Function
-- `setlist.js`: `GET /.netlify/functions/setlist?q=<set name>` → `{ title, total, cards:[{id,name,number?}] }`
+## Setup
+1. Set Netlify env vars:
+   - `SPORTSCARDSPRO_TOKEN` = your SportsCardsPro API token
+   - `ALERT_USER` = your username in the app (defaults to `guest`)
+
+2. Deploy. Netlify will automatically run the schedules declared in the functions.
+
+## Notes
+- Alerts operate on the **active price key** (you can change it per item when setting alerts).
+- Notifications persist in Blobs: `cardtrack/alerts/notifications/<user>.json`.
+- The scan function stores per-item price history (last 365 days) at `cardtrack/alerts/state/<user>.json` for 52-week checks.
