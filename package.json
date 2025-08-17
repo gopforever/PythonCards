@@ -6,5 +6,8 @@
     "dev": "netlify dev",
     "build": "echo 'No build step'",
     "deploy": "netlify deploy --prod"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^10.0.8"
   }
 }
