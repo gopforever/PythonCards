@@ -1,23 +1,23 @@
-/* CardTrack Pro — CSV Template Generator + CSV Import/Export + Blobs persistence (UI unchanged) */
+/* CardTrack Pro — Multi-Collections (Personal, Sales, Trade) + Blobs + CSV + Template */
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 const fmtUSD = (cents) => (cents==null?0:cents/100).toLocaleString(undefined,{style:"currency",currency:"USD"});
 
-const CACHE = { USER:"ctp.user", SNAP:"ctp.snap.v1" };
-const state = { user:null, inventory:[], watchlist:[], history:[], chart:null };
+const CACHE = { USER:"ctp.user", SNAP_PREF:"ctp.snap.v1." , COLLECTION:"ctp.collection" };
+const state = { user:null, collection:"Personal", inventory:[], watchlist:[], history:[], chart:null };
 
 function debounce(fn, ms=600){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
 
-async function cloudLoad(user){
-  const res = await fetch(`/.netlify/functions/storage?user=${encodeURIComponent(user)}`, { headers:{ "accept":"application/json" } });
+async function cloudLoad(user, collection){
+  const res = await fetch(`/.netlify/functions/storage?user=${encodeURIComponent(user)}&collection=${encodeURIComponent(collection)}`, { headers:{ "accept":"application/json" } });
   if (!res.ok) throw new Error(`load ${res.status}`);
   return await res.json();
 }
-const cloudSave = debounce(async (user, data)=>{
+const cloudSave = debounce(async (user, collection, data)=>{
   await fetch(`/.netlify/functions/storage`, {
     method:"POST",
     headers:{ "content-type":"application/json" },
-    body: JSON.stringify({ user, data })
+    body: JSON.stringify({ user, collection, data })
   });
 }, 800);
 
@@ -47,8 +47,8 @@ function updateStats(){
   $("#stat-cost").textContent = fmtUSD(t.cost);
   $("#stat-pl").textContent = fmtUSD(t.pl);
   renderChart();
-  localStorage.setItem(CACHE.SNAP, JSON.stringify({ inventory:state.inventory, watchlist:state.watchlist, history:state.history }));
-  cloudSave(state.user, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
+  localStorage.setItem(CACHE.SNAP_PREF + state.collection, JSON.stringify({ inventory:state.inventory, watchlist:state.watchlist, history:state.history }));
+  cloudSave(state.user, state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
 }
 
 // --- Chart ---
@@ -65,7 +65,7 @@ function renderChart(){
   } else { state.chart.data.labels=labels; state.chart.data.datasets[0].data=est; state.chart.data.datasets[1].data=cost; state.chart.update(); }
 }
 
-// --- UI (same look) ---
+// --- UI helpers ---
 function priceKeysDisplay(obj){
   const preferred=["loose-price","graded-price","manual-only-price","new-price","cib-price","bgs-10-price","condition-17-price","condition-18-price"];
   const keys=preferred.filter(k=>obj[k]!=null); Object.keys(obj).forEach(k=>{ if (/-price$/.test(k) && !keys.includes(k)) keys.push(k); }); return keys;
@@ -112,7 +112,7 @@ function renderResults(products){
 
 function renderInventory(){
   const list=$("#inventory-list"); list.innerHTML="";
-  if (!state.inventory.length){ list.innerHTML=`<div class="col-span-full text-slate-300/80">No items yet. Use search to add cards.</div>`; return; }
+  if (!state.inventory.length){ list.innerHTML=`<div class="col-span-full text-slate-300/80">No items in ${state.collection}. Use search to add cards.</div>`; return; }
   state.inventory.forEach((it, idx)=>{
     const keys = priceKeysDisplay(it.prices);
     const gradeOptions = keys.map(k=>`<option value="${k}" ${k===it.gradeKey?"selected":""}>${GRADE_LABEL(k)}</option>`).join("");
@@ -161,12 +161,8 @@ function toCSVValue(v){
   return s;
 }
 function buildCSV(rows){
-  const lines = [];
-  lines.push(CSV_HEADERS.join(","));
-  for (const r of rows){
-    const vals = CSV_HEADERS.map(h => toCSVValue(r[h]));
-    lines.push(vals.join(","));
-  }
+  const lines = []; lines.push(CSV_HEADERS.join(","));
+  for (const r of rows){ const vals = CSV_HEADERS.map(h => toCSVValue(r[h])); lines.push(vals.join(",")); }
   return lines.join("\\n");
 }
 function parseCSV(text){
@@ -244,7 +240,7 @@ function numOrNull(v){
   return Number.isFinite(n) ? Math.round(n) : null;
 }
 
-// --- CSV template ---
+// --- CSV Template ---
 function buildTemplateCSV(includeExample){
   const rows = [];
   if (includeExample){
@@ -273,14 +269,18 @@ function buildTemplateCSV(includeExample){
 document.addEventListener("DOMContentLoaded", async ()=>{
   state.user = localStorage.getItem(CACHE.USER) || "guest";
   localStorage.setItem(CACHE.USER, state.user);
+  state.collection = localStorage.getItem(CACHE.COLLECTION) || "Personal";
+  $("#collection-select").value = state.collection;
 
+  // optimistic cache per collection
   try {
-    const snap = JSON.parse(localStorage.getItem(CACHE.SNAP)||"null");
+    const snap = JSON.parse(localStorage.getItem(CACHE.SNAP_PREF + state.collection) || "null");
     if (snap){ state.inventory=snap.inventory||[]; state.watchlist=snap.watchlist||[]; state.history=snap.history||[]; }
   } catch {}
 
+  // load from cloud for active collection
   try {
-    const cloud = await cloudLoad(state.user);
+    const cloud = await cloudLoad(state.user, state.collection);
     if (cloud){
       state.inventory = Array.isArray(cloud.inventory) ? cloud.inventory : [];
       state.watchlist = Array.isArray(cloud.watchlist) ? cloud.watchlist : [];
@@ -290,11 +290,35 @@ document.addEventListener("DOMContentLoaded", async ()=>{
 
   updateStats(); renderInventory();
 
+  // collection switcher
+  $("#collection-select").addEventListener("change", async (e)=>{
+    state.collection = e.target.value || "Personal";
+    localStorage.setItem(CACHE.COLLECTION, state.collection);
+    // optimistic local cache
+    try{
+      const snap = JSON.parse(localStorage.getItem(CACHE.SNAP_PREF + state.collection) || "null");
+      state.inventory = snap?.inventory || [];
+      state.watchlist = snap?.watchlist || [];
+      state.history = snap?.history || [];
+    } catch { state.inventory=[]; state.watchlist=[]; state.history=[]; }
+    updateStats(); renderInventory();
+    // fetch fresh from cloud
+    try {
+      const cloud = await cloudLoad(state.user, state.collection);
+      if (cloud){
+        state.inventory = Array.isArray(cloud.inventory) ? cloud.inventory : [];
+        state.watchlist = Array.isArray(cloud.watchlist) ? cloud.watchlist : [];
+        state.history = Array.isArray(cloud.history) ? cloud.history : [];
+        updateStats(); renderInventory();
+      }
+    } catch(e){ console.warn("Cloud load failed", e); }
+  });
+
   $("#search-form").addEventListener("submit",(e)=>{ e.preventDefault(); const q=$("#q").value.trim(); if(q) doSearch(q); });
 
   $("#export-json").addEventListener("click",()=>{
     const blob=new Blob([JSON.stringify({inventory:state.inventory,watchlist:state.watchlist,history:state.history},null,2)],{type:"application/json"});
-    const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="cardtrack_pro_export.json"; a.click(); URL.revokeObjectURL(url);
+    const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`cardtrack_pro_export_${state.collection}.json`; a.click(); URL.revokeObjectURL(url);
   });
   $("#import-json").addEventListener("click",()=>$("#import-file").click());
   $("#import-file").addEventListener("change", async (e)=>{
@@ -304,7 +328,7 @@ document.addEventListener("DOMContentLoaded", async ()=>{
       if(Array.isArray(obj.watchlist)) state.watchlist=obj.watchlist;
       if(Array.isArray(obj.history)) state.history=obj.history;
       logDailySnapshot(); updateStats(); renderInventory();
-      await cloudSave(state.user, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
+      await cloudSave(state.user, state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
     } catch { alert("Failed to import JSON"); }
   });
 
@@ -312,7 +336,7 @@ document.addEventListener("DOMContentLoaded", async ()=>{
     const rows = inventoryToCSVRows();
     const csv = buildCSV(rows);
     const blob = new Blob([csv], { type:"text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="cardtrack_pro_inventory.csv"; a.click(); URL.revokeObjectURL(url);
+    const url = URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`cardtrack_pro_inventory_${state.collection}.csv`; a.click(); URL.revokeObjectURL(url);
   });
   $("#import-csv").addEventListener("click",()=>$("#import-file-csv").click());
   $("#import-file-csv").addEventListener("change", async (e)=>{
@@ -326,11 +350,10 @@ document.addEventListener("DOMContentLoaded", async ()=>{
       const inv = csvRowsToInventory(parsed.rows);
       state.inventory = inv;
       logDailySnapshot(); updateStats(); renderInventory();
-      await cloudSave(state.user, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
+      await cloudSave(state.user, state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
     } catch(err){ console.error(err); alert("Failed to import CSV"); }
   });
 
-  // CSV Template generator
   $("#csv-template").addEventListener("click",()=>{
     const includeExample = confirm("Include a sample example row?");
     const csv = buildTemplateCSV(includeExample);
