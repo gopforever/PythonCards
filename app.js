@@ -1,47 +1,36 @@
-/* CardTrack Pro — Grade select overflow fix + human labels (no visual change) */
+/* CardTrack Pro — Netlify Blobs persistence (UI unchanged) */
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 const fmtUSD = (cents) => (cents==null?0:cents/100).toLocaleString(undefined,{style:"currency",currency:"USD"});
 
-const STORAGE_KEYS = { INVENTORY:"ctp.inventory.v1", WATCH:"ctp.watchlist.v1", HISTORY:"ctp.history.v1" };
-const state = { inventory:[], watchlist:[], history:[], chart:null };
+// local cache keys (still used for user id + optimistic cache)
+const CACHE = { USER:"ctp.user", SNAP:"ctp.snap.v1" };
 
-const GRADE_LABEL = (k) => {
-  const map = {
-    "loose-price":"Loose",
-    "graded-price":"Graded",
-    "new-price":"New",
-    "cib-price":"CIB",
-    "manual-only-price":"Manual",
-    "bgs-10-price":"BGS 10",
-    "condition-17-price":"Cond 17",
-    "condition-18-price":"Cond 18",
-  };
-  if (map[k]) return map[k];
-  return k.replace(/-/g," ").replace(/\b\w/g, s=>s.toUpperCase());
-};
+// state
+const state = { user:null, inventory:[], watchlist:[], history:[], chart:null };
 
-function todayISO(d=new Date()) { return d.toISOString().slice(0,10); }
+// debounce helper
+function debounce(fn, ms=600){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
 
-function loadState(){
-  try {
-    state.inventory = JSON.parse(localStorage.getItem(STORAGE_KEYS.INVENTORY) || "[]");
-    state.watchlist = JSON.parse(localStorage.getItem(STORAGE_KEYS.WATCH) || "[]");
-    state.history = JSON.parse(localStorage.getItem(STORAGE_KEYS.HISTORY) || "[]");
-  } catch { state.inventory=[]; state.watchlist=[]; state.history=[]; }
-  logDailySnapshot(); updateStats();
+// ---- Cloud I/O using Netlify Functions ----
+async function cloudLoad(user){
+  const res = await fetch(`/.netlify/functions/storage?user=${encodeURIComponent(user)}`, { headers:{ "accept":"application/json" } });
+  if (!res.ok) throw new Error(`load ${res.status}`);
+  return await res.json();
 }
-function saveState(){
-  localStorage.setItem(STORAGE_KEYS.INVENTORY, JSON.stringify(state.inventory));
-  localStorage.setItem(STORAGE_KEYS.WATCH, JSON.stringify(state.watchlist));
-  logDailySnapshot(); updateStats();
-}
-function saveHistory(){ localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(state.history)); }
+const cloudSave = debounce(async (user, data)=>{
+  await fetch(`/.netlify/functions/storage`, {
+    method:"POST",
+    headers:{ "content-type":"application/json" },
+    body: JSON.stringify({ user, data })
+  });
+}, 800);
 
+// ---- Inventory math ----
 function estimateItemValue(it){
   const prices = it.prices || {};
   const grade = it.gradeKey || "loose-price";
-  let cents = prices[grade]; if (cents==null) cents = prices["loose-price"];
+  let cents = prices[grade]; if (cents == null) cents = prices["loose-price"];
   return (Number(cents)||0) * (Number(it.qty)||1);
 }
 function totals(){
@@ -50,6 +39,18 @@ function totals(){
   const cost = state.inventory.reduce((a,it)=>a+(Number(it.costBasisCents)||0),0);
   return { count, est, cost, pl: est-cost };
 }
+function todayISO(d=new Date()){ return d.toISOString().slice(0,10); }
+
+function logDailySnapshot(){
+  const t = totals();
+  const last = state.history[state.history.length-1];
+  const d = todayISO();
+  if (!last || last.date !== d){
+    state.history.push({ date:d, ts:new Date().toISOString(), estCents:t.est, costCents:t.cost });
+    if (state.history.length > 730) state.history = state.history.slice(-730);
+  } else { last.estCents = t.est; last.costCents = t.cost; }
+}
+
 function updateStats(){
   const t = totals();
   $("#stat-count").textContent = Number(t.count||0).toLocaleString();
@@ -57,17 +58,18 @@ function updateStats(){
   $("#stat-cost").textContent = fmtUSD(t.cost);
   $("#stat-pl").textContent = fmtUSD(t.pl);
   renderChart();
+  // optimistic cache
+  localStorage.setItem(CACHE.SNAP, JSON.stringify({ inventory:state.inventory, watchlist:state.watchlist, history:state.history }));
+  // cloud save (debounced)
+  cloudSave(state.user, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
 }
 
-function logDailySnapshot(){
-  const t = totals(); const last = state.history[state.history.length-1]; const ts = new Date(); const d=todayISO(ts);
-  if (!last || last.date!==d) { state.history.push({date:d, ts:ts.toISOString(), estCents:t.est, costCents:t.cost}); if (state.history.length>730) state.history=state.history.slice(-730); saveHistory(); }
-  else { last.estCents=t.est; last.costCents=t.cost; saveHistory(); }
-}
-
+// ---- Chart ----
 function renderChart(){
   const canvas = $("#valueChart"); if (!canvas) return;
-  const labels = state.history.map(p=>p.date); const est = state.history.map(p=>p.estCents/100); const cost = state.history.map(p=>p.costCents/100);
+  const labels = state.history.map(p=>p.date);
+  const est = state.history.map(p=>p.estCents/100);
+  const cost = state.history.map(p=>p.costCents/100);
   if (!state.chart){
     state.chart = new Chart(canvas, { type:"line", data:{ labels, datasets:[ {label:"Est. Value", data:est, tension:.25}, {label:"Cost Basis", data:cost, tension:.25} ] },
       options:{ responsive:true, maintainAspectRatio:false, interaction:{mode:"index",intersect:false},
@@ -76,19 +78,27 @@ function renderChart(){
   } else { state.chart.data.labels=labels; state.chart.data.datasets[0].data=est; state.chart.data.datasets[1].data=cost; state.chart.update(); }
 }
 
+// ---- UI pieces identical to previous build ----
+function priceKeysDisplay(obj){
+  const preferred=["loose-price","graded-price","manual-only-price","new-price","cib-price","bgs-10-price","condition-17-price","condition-18-price"];
+  const keys=preferred.filter(k=>obj[k]!=null); Object.keys(obj).forEach(k=>{ if (/-price$/.test(k) && !keys.includes(k)) keys.push(k); }); return keys;
+}
+const GRADE_LABEL = (k) => {
+  const map = { "loose-price":"Loose", "graded-price":"Graded", "new-price":"New", "cib-price":"CIB", "manual-only-price":"Manual", "bgs-10-price":"BGS 10", "condition-17-price":"Cond 17", "condition-18-price":"Cond 18" };
+  return map[k] || k.replace(/-/g," ").replace(/\b\w/g, s=>s.toUpperCase());
+};
+
 async function doSearch(q){
   const res = await fetch(`/.netlify/functions/prices?type=products&q=${encodeURIComponent(q)}`);
   if (!res.ok){ $("#results").innerHTML = `<div class="col-span-full text-red-300">Search failed: ${res.status}</div>`; return; }
-  const data = await res.json(); const products = data.products || (data.status==="success"?[data]:[]); renderResults(products);
+  const data = await res.json();
+  const products = data.products || (data.status==="success" ? [data] : []);
+  renderResults(products);
 }
-function priceKeysDisplay(obj){
-  const preferred=["loose-price","graded-price","manual-only-price","new-price","cib-price","bgs-10-price","condition-17-price","condition-18-price"];
-  const keys=preferred.filter(k=>obj[k]!=null); Object.keys(obj).forEach(k=>{ if (/-price$/.test(k)&&!keys.includes(k)) keys.push(k); }); return keys;
-}
-
 function renderResults(products){
-  const el=$("#results"); el.innerHTML=""; if(!products?.length){ el.innerHTML=`<div class="col-span-full text-slate-300/80">No results.</div>`; return; }
-  for(const p of products){
+  const container=$("#results"); container.innerHTML="";
+  if (!products?.length){ container.innerHTML=`<div class="col-span-full text-slate-300/80">No results.</div>`; return; }
+  for (const p of products){
     const keys = priceKeysDisplay(p);
     const priceRows = keys.map(k=>`<div class="flex items-center justify-between text-sm"><div class="text-slate-300/80">${k.replace(/-/g," ")}</div><div class="font-semibold price">${fmtUSD(p[k])}</div></div>`).join("");
     const card=document.createElement("div"); card.className="glass rounded-2xl p-4";
@@ -100,25 +110,26 @@ function renderResults(products){
         </button>
       </div>
       <div class="mt-3 space-y-1">${priceRows}</div>`;
-    el.appendChild(card);
+    container.appendChild(card);
   }
-  el.querySelectorAll("button[data-id]").forEach(btn=>{
+  container.querySelectorAll("button[data-id]").forEach(btn => {
     btn.addEventListener("click",()=>{
-      const data=JSON.parse(btn.getAttribute("data-json").replaceAll("&apos;","'"));
-      const inv={ id:data.id, productName:data["product-name"], setName:data["console-name"],
+      const data = JSON.parse(btn.getAttribute("data-json").replaceAll("&apos;","'"));
+      const inv = { id:data.id, productName:data["product-name"], setName:data["console-name"],
         prices:Object.fromEntries(Object.entries(data).filter(([k])=>/-price$/.test(k)||["loose-price","new-price","graded-price","cib-price","manual-only-price","bgs-10-price","condition-17-price","condition-18-price"].includes(k))),
         qty:1, costBasisCents:0, note:"", gradeKey:"loose-price" };
-      state.inventory.push(inv); saveState(); renderInventory();
+      state.inventory.push(inv);
+      logDailySnapshot(); updateStats(); renderInventory();
     });
   });
 }
 
 function renderInventory(){
   const list=$("#inventory-list"); list.innerHTML="";
-  if(!state.inventory.length){ list.innerHTML=`<div class="col-span-full text-slate-300/80">No items yet. Use search to add cards.</div>`; return; }
-  state.inventory.forEach((it,idx)=>{
-    const keys=priceKeysDisplay(it.prices);
-    const gradeOptions = keys.map(k => `<option value="${k}" ${k===it.gradeKey?"selected":""}>${GRADE_LABEL(k)}</option>`).join("");
+  if (!state.inventory.length){ list.innerHTML=`<div class="col-span-full text-slate-300/80">No items yet. Use search to add cards.</div>`; return; }
+  state.inventory.forEach((it, idx)=>{
+    const keys = priceKeysDisplay(it.prices);
+    const gradeOptions = keys.map(k=>`<option value="${k}" ${k===it.gradeKey?"selected":""}>${GRADE_LABEL(k)}</option>`).join("");
     const row=document.createElement("div"); row.className="glass rounded-2xl p-4";
     row.innerHTML=`
       <div class="flex items-start justify-between gap-3 min-w-0">
@@ -146,32 +157,65 @@ function renderInventory(){
       <textarea placeholder="Notes (purchase details, cert #, comps)" data-field="note" class="mt-3 w-full chip rounded-xl px-3 py-2 bg-transparent outline-none wrap-anywhere">${it.note||""}</textarea>`;
     list.appendChild(row);
 
-    row.querySelector('[data-field="qty"]').addEventListener("input",(e)=>{ it.qty=Number(e.target.value||1); saveState(); renderInventory(); });
-    row.querySelector('[data-field="grade"]').addEventListener("change",(e)=>{ it.gradeKey=e.target.value; saveState(); renderInventory(); });
-    row.querySelector('[data-field="cost"]').addEventListener("input",(e)=>{ it.costBasisCents=Math.round(Number(e.target.value||0)*100); saveState(); renderInventory(); });
-    row.querySelector('[data-field="note"]').addEventListener("input",(e)=>{ it.note=e.target.value||""; saveState(); });
-    row.querySelector('[data-action="remove"]').addEventListener("click",()=>{ state.inventory.splice(idx,1); saveState(); renderInventory(); });
+    row.querySelector('[data-field="qty"]').addEventListener("input",(e)=>{ it.qty=Number(e.target.value||1); logDailySnapshot(); updateStats(); renderInventory(); });
+    row.querySelector('[data-field="grade"]').addEventListener("change",(e)=>{ it.gradeKey=e.target.value; logDailySnapshot(); updateStats(); renderInventory(); });
+    row.querySelector('[data-field="cost"]').addEventListener("input",(e)=>{ it.costBasisCents=Math.round(Number(e.target.value||0)*100); logDailySnapshot(); updateStats(); renderInventory(); });
+    row.querySelector('[data-field="note"]').addEventListener("input",(e)=>{ it.note=e.target.value||""; updateStats(); });
+    row.querySelector('[data-action="remove"]').addEventListener("click",()=>{ state.inventory.splice(idx,1); logDailySnapshot(); updateStats(); renderInventory(); });
   });
 }
 
-document.addEventListener("DOMContentLoaded",()=>{
-  loadState(); renderInventory();
+document.addEventListener("DOMContentLoaded", async ()=>{
+  // user id prompt (one-time), kept out of UI
+  state.user = localStorage.getItem(CACHE.USER);
+  if (!state.user){
+    const u = prompt("Enter a username (used to sync your data):");
+    state.user = (u||"guest").trim() || "guest";
+    localStorage.setItem(CACHE.USER, state.user);
+  }
+
+  // optimistic local cache while we fetch cloud data
+  try {
+    const snap = JSON.parse(localStorage.getItem(CACHE.SNAP)||"null");
+    if (snap){ state.inventory=snap.inventory||[]; state.watchlist=snap.watchlist||[]; state.history=snap.history||[]; }
+  } catch {}
+
+  // try cloud load
+  try {
+    const cloud = await cloudLoad(state.user);
+    if (cloud){
+      state.inventory = Array.isArray(cloud.inventory) ? cloud.inventory : [];
+      state.watchlist = Array.isArray(cloud.watchlist) ? cloud.watchlist : [];
+      state.history = Array.isArray(cloud.history) ? cloud.history : [];
+    }
+  } catch (e) {
+    console.warn("Cloud load failed; using local cache", e);
+  }
+
+  // initial render
+  updateStats(); renderInventory();
+
+  // search form
   $("#search-form").addEventListener("submit",(e)=>{ e.preventDefault(); const q=$("#q").value.trim(); if(q) doSearch(q); });
+
+  // export/import includes everything
   $("#export-json").addEventListener("click",()=>{
     const blob=new Blob([JSON.stringify({inventory:state.inventory,watchlist:state.watchlist,history:state.history},null,2)],{type:"application/json"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="cardtrack_pro_export.json"; a.click(); URL.revokeObjectURL(url);
   });
   $("#import-json").addEventListener("click",()=>$("#import-file").click());
-  $("#import-file").addEventListener("change",async(e)=>{
+  $("#import-file").addEventListener("change", async (e)=>{
     const file=e.target.files?.[0]; if(!file) return;
     try{ const text=await file.text(); const obj=JSON.parse(text);
       if(Array.isArray(obj.inventory)) state.inventory=obj.inventory;
       if(Array.isArray(obj.watchlist)) state.watchlist=obj.watchlist;
       if(Array.isArray(obj.history)) state.history=obj.history;
-      saveState(); renderInventory(); renderChart();
-    } catch{ alert("Failed to import JSON"); }
+      logDailySnapshot(); updateStats(); renderInventory();
+      await cloudSave(state.user, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
+    } catch { alert("Failed to import JSON"); }
   });
+
   $("#toggle-history")?.addEventListener("click",()=>{
-    const card=$("#history-card"); if(!card) return; card.classList.toggle("hidden"); if(!card.classList.contains("hidden")) renderChart();
+    const card=$("#history-card"); if (!card) return; card.classList.toggle("hidden"); if (!card.classList.contains("hidden")) renderChart();
   });
 });

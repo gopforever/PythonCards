@@ -8,6 +8,6 @@
     "deploy": "netlify deploy --prod"
   },
   "dependencies": {
-    "@netlify/blobs": "^10.0.8"
+    "@netlify/blobs": "^6.5.0"
   }
 }
