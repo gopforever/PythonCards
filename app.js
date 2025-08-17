@@ -1,9 +1,10 @@
-/* CardTrack Pro — Multi-Collections (Personal, Sales, Trade) + Blobs + CSV + Template */
+/* CardTrack Pro — Clone to… (between Personal/Sales/Trade) + Multi-Collections + Blobs + CSV */
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 const fmtUSD = (cents) => (cents==null?0:cents/100).toLocaleString(undefined,{style:"currency",currency:"USD"});
 
 const CACHE = { USER:"ctp.user", SNAP_PREF:"ctp.snap.v1." , COLLECTION:"ctp.collection" };
+const COLLECTIONS = ["Personal","Sales","Trade"];
 const state = { user:null, collection:"Personal", inventory:[], watchlist:[], history:[], chart:null };
 
 function debounce(fn, ms=600){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
@@ -19,7 +20,15 @@ const cloudSave = debounce(async (user, collection, data)=>{
     headers:{ "content-type":"application/json" },
     body: JSON.stringify({ user, collection, data })
   });
-}, 800);
+}, 600);
+
+// local snapshot helpers
+function getLocalSnap(col){
+  try { return JSON.parse(localStorage.getItem(CACHE.SNAP_PREF + col) || "null") || {inventory:[],watchlist:[],history:[]}; } catch { return {inventory:[],watchlist:[],history:[]}; }
+}
+function setLocalSnap(col, data){
+  localStorage.setItem(CACHE.SNAP_PREF + col, JSON.stringify(data));
+}
 
 // --- Pricing calc ---
 function estimateItemValue(it){
@@ -47,7 +56,7 @@ function updateStats(){
   $("#stat-cost").textContent = fmtUSD(t.cost);
   $("#stat-pl").textContent = fmtUSD(t.pl);
   renderChart();
-  localStorage.setItem(CACHE.SNAP_PREF + state.collection, JSON.stringify({ inventory:state.inventory, watchlist:state.watchlist, history:state.history }));
+  setLocalSnap(state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
   cloudSave(state.user, state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
 }
 
@@ -110,6 +119,33 @@ function renderResults(products){
   });
 }
 
+// --- Clone to… ---
+function normalizeCollection(input){
+  const s = (input||"").toLowerCase();
+  if (s.startsWith("p")) return "Personal";
+  if (s.startsWith("s")) return "Sales";
+  if (s.startsWith("t")) return "Trade";
+  return null;
+}
+async function cloneToCollection(item, target){
+  if (!COLLECTIONS.includes(target)) { alert("Invalid collection"); return; }
+  // load existing target snapshot (local first)
+  let tgtSnap = getLocalSnap(target);
+  // clone item (shallow is fine; ensure a new object)
+  const clone = JSON.parse(JSON.stringify(item));
+  tgtSnap.inventory = Array.isArray(tgtSnap.inventory) ? tgtSnap.inventory.slice() : [];
+  tgtSnap.inventory.push(clone);
+  setLocalSnap(target, tgtSnap);
+  // push to cloud (best-effort)
+  try{
+    await cloudSave(state.user, target, { inventory:tgtSnap.inventory, watchlist:tgtSnap.watchlist||[], history:tgtSnap.history||[] });
+    alert(`Cloned to ${target}`);
+  } catch(e){
+    console.warn("Cloud save failed for clone", e);
+    alert(`Cloned to ${target} (will sync when online)`);
+  }
+}
+
 function renderInventory(){
   const list=$("#inventory-list"); list.innerHTML="";
   if (!state.inventory.length){ list.innerHTML=`<div class="col-span-full text-slate-300/80">No items in ${state.collection}. Use search to add cards.</div>`; return; }
@@ -119,8 +155,14 @@ function renderInventory(){
     const row=document.createElement("div"); row.className="glass rounded-2xl p-4";
     row.innerHTML=`
       <div class="flex items-start justify-between gap-3 min-w-0">
-        <div class="min-w-0"><div class="text-sm text-slate-300/70 wrap-anywhere">${it.setName||""}</div><div class="font-semibold wrap-anywhere">${it.productName||""}</div></div>
-        <button class="shrink-0 text-slate-300/80 hover:text-red-300" data-action="remove" title="Remove">✖</button>
+        <div class="min-w-0">
+          <div class="text-sm text-slate-300/70 wrap-anywhere">${it.setName||""}</div>
+          <div class="font-semibold wrap-anywhere">${it.productName||""}</div>
+        </div>
+        <div class="shrink-0 flex items-center gap-3">
+          <a class="linkish cursor-pointer" data-action="clone">Clone to…</a>
+          <button class="text-slate-300/80 hover:text-red-300" data-action="remove" title="Remove">✖</button>
+        </div>
       </div>
       <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
         <label class="chip rounded-xl px-3 py-2 flex items-center gap-2 overflow-hidden">
@@ -148,6 +190,12 @@ function renderInventory(){
     row.querySelector('[data-field="cost"]').addEventListener("input",(e)=>{ it.costBasisCents=Math.round(Number(e.target.value||0)*100); logDailySnapshot(); updateStats(); renderInventory(); });
     row.querySelector('[data-field="note"]').addEventListener("input",(e)=>{ it.note=e.target.value||""; updateStats(); });
     row.querySelector('[data-action="remove"]').addEventListener("click",()=>{ state.inventory.splice(idx,1); logDailySnapshot(); updateStats(); renderInventory(); });
+    row.querySelector('[data-action="clone"]').addEventListener("click", async ()=>{
+      const targetInput = prompt("Clone to which collection? (Personal / Sales / Trade)", state.collection === "Personal" ? "Sales" : "Personal");
+      const target = normalizeCollection(targetInput);
+      if (!target) return;
+      await cloneToCollection(it, target);
+    });
   });
 }
 
@@ -270,15 +318,13 @@ document.addEventListener("DOMContentLoaded", async ()=>{
   state.user = localStorage.getItem(CACHE.USER) || "guest";
   localStorage.setItem(CACHE.USER, state.user);
   state.collection = localStorage.getItem(CACHE.COLLECTION) || "Personal";
-  $("#collection-select").value = state.collection;
+  const colSel = $("#collection-select"); colSel.value = state.collection;
 
-  // optimistic cache per collection
   try {
-    const snap = JSON.parse(localStorage.getItem(CACHE.SNAP_PREF + state.collection) || "null");
-    if (snap){ state.inventory=snap.inventory||[]; state.watchlist=snap.watchlist||[]; state.history=snap.history||[]; }
+    const snap = getLocalSnap(state.collection);
+    state.inventory=snap.inventory||[]; state.watchlist=snap.watchlist||[]; state.history=snap.history||[];
   } catch {}
 
-  // load from cloud for active collection
   try {
     const cloud = await cloudLoad(state.user, state.collection);
     if (cloud){
@@ -290,19 +336,14 @@ document.addEventListener("DOMContentLoaded", async ()=>{
 
   updateStats(); renderInventory();
 
-  // collection switcher
-  $("#collection-select").addEventListener("change", async (e)=>{
+  colSel.addEventListener("change", async (e)=>{
     state.collection = e.target.value || "Personal";
     localStorage.setItem(CACHE.COLLECTION, state.collection);
-    // optimistic local cache
     try{
-      const snap = JSON.parse(localStorage.getItem(CACHE.SNAP_PREF + state.collection) || "null");
-      state.inventory = snap?.inventory || [];
-      state.watchlist = snap?.watchlist || [];
-      state.history = snap?.history || [];
+      const snap = getLocalSnap(state.collection);
+      state.inventory=snap.inventory||[]; state.watchlist=snap.watchlist||[]; state.history=snap.history||[];
     } catch { state.inventory=[]; state.watchlist=[]; state.history=[]; }
     updateStats(); renderInventory();
-    // fetch fresh from cloud
     try {
       const cloud = await cloudLoad(state.user, state.collection);
       if (cloud){
