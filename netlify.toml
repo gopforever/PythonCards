@@ -1,12 +1,8 @@
-# Netlify configuration for CardTrack Pro
 [build]
-  # No framework build; just serve static files
   publish = "."
-
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"
-
 [[headers]]
   for = "/*"
   [headers.values]

@@ -6,7 +6,5 @@
     "dev": "netlify dev",
     "build": "echo 'No build step'",
     "deploy": "netlify deploy --prod"
-  },
-  "devDependencies": {},
-  "dependencies": {}
+  }
 }
