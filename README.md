@@ -1,16 +1,12 @@
-# CardTrack Pro — Netlify Blobs Edition
+# CardTrack Pro — CSV Import/Export Add-on
 
-This build swaps localStorage persistence for **Netlify Blobs** so inventory + history sync across devices.
-UI is unchanged.
+Adds CSV Import/Export for inventory. UI styling is unchanged; two small links are placed under the existing JSON buttons.
 
-## Deploy
-1) Ensure your site is on Netlify.
-2) `npm install` (adds @netlify/blobs for functions bundling).
-3) Deploy (push/drag-drop). No env vars required.
+## CSV format
+Header columns (case-sensitive):
+id,productName,setName,qty,gradeKey,costBasis,loose-price,graded-price,new-price,cib-price,manual-only-price,bgs-10-price,condition-17-price,condition-18-price,note
 
-## How it works
-- New function: `/.netlify/functions/storage`
-  - `GET ?user=<id>` -> returns `{ inventory, watchlist, history }`
-  - `POST` body `{ user, data: { inventory, watchlist, history } }` -> saves JSON
-- Frontend keeps a local cache and syncs after each change (debounced). On first load, it asks for a **Username** (just used as a key).
+- `costBasis` is in dollars (e.g., 12.50). It will be converted to cents internally.
+- Price fields are optional; leave blank if unknown.
+- Import expects UTF-8 CSV with comma separators and quotes for values that include commas.
 

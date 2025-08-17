@@ -1,18 +1,13 @@
-/* CardTrack Pro — Netlify Blobs persistence (UI unchanged) */
+/* CardTrack Pro — CSV Import/Export (UI unchanged) + Blobs persistence */
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 const fmtUSD = (cents) => (cents==null?0:cents/100).toLocaleString(undefined,{style:"currency",currency:"USD"});
 
-// local cache keys (still used for user id + optimistic cache)
 const CACHE = { USER:"ctp.user", SNAP:"ctp.snap.v1" };
-
-// state
 const state = { user:null, inventory:[], watchlist:[], history:[], chart:null };
 
-// debounce helper
 function debounce(fn, ms=600){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
 
-// ---- Cloud I/O using Netlify Functions ----
 async function cloudLoad(user){
   const res = await fetch(`/.netlify/functions/storage?user=${encodeURIComponent(user)}`, { headers:{ "accept":"application/json" } });
   if (!res.ok) throw new Error(`load ${res.status}`);
@@ -26,7 +21,7 @@ const cloudSave = debounce(async (user, data)=>{
   });
 }, 800);
 
-// ---- Inventory math ----
+// --- Pricing calc ---
 function estimateItemValue(it){
   const prices = it.prices || {};
   const grade = it.gradeKey || "loose-price";
@@ -40,17 +35,11 @@ function totals(){
   return { count, est, cost, pl: est-cost };
 }
 function todayISO(d=new Date()){ return d.toISOString().slice(0,10); }
-
 function logDailySnapshot(){
-  const t = totals();
-  const last = state.history[state.history.length-1];
-  const d = todayISO();
-  if (!last || last.date !== d){
-    state.history.push({ date:d, ts:new Date().toISOString(), estCents:t.est, costCents:t.cost });
-    if (state.history.length > 730) state.history = state.history.slice(-730);
-  } else { last.estCents = t.est; last.costCents = t.cost; }
+  const t = totals(); const last = state.history[state.history.length-1]; const d = todayISO();
+  if (!last || last.date !== d){ state.history.push({ date:d, ts:new Date().toISOString(), estCents:t.est, costCents:t.cost }); if (state.history.length>730) state.history=state.history.slice(-730);
+  } else { last.estCents=t.est; last.costCents=t.cost; }
 }
-
 function updateStats(){
   const t = totals();
   $("#stat-count").textContent = Number(t.count||0).toLocaleString();
@@ -58,13 +47,11 @@ function updateStats(){
   $("#stat-cost").textContent = fmtUSD(t.cost);
   $("#stat-pl").textContent = fmtUSD(t.pl);
   renderChart();
-  // optimistic cache
   localStorage.setItem(CACHE.SNAP, JSON.stringify({ inventory:state.inventory, watchlist:state.watchlist, history:state.history }));
-  // cloud save (debounced)
   cloudSave(state.user, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
 }
 
-// ---- Chart ----
+// --- Chart ---
 function renderChart(){
   const canvas = $("#valueChart"); if (!canvas) return;
   const labels = state.history.map(p=>p.date);
@@ -78,7 +65,7 @@ function renderChart(){
   } else { state.chart.data.labels=labels; state.chart.data.datasets[0].data=est; state.chart.data.datasets[1].data=cost; state.chart.update(); }
 }
 
-// ---- UI pieces identical to previous build ----
+// --- UI (same look) ---
 function priceKeysDisplay(obj){
   const preferred=["loose-price","graded-price","manual-only-price","new-price","cib-price","bgs-10-price","condition-17-price","condition-18-price"];
   const keys=preferred.filter(k=>obj[k]!=null); Object.keys(obj).forEach(k=>{ if (/-price$/.test(k) && !keys.includes(k)) keys.push(k); }); return keys;
@@ -118,8 +105,7 @@ function renderResults(products){
       const inv = { id:data.id, productName:data["product-name"], setName:data["console-name"],
         prices:Object.fromEntries(Object.entries(data).filter(([k])=>/-price$/.test(k)||["loose-price","new-price","graded-price","cib-price","manual-only-price","bgs-10-price","condition-17-price","condition-18-price"].includes(k))),
         qty:1, costBasisCents:0, note:"", gradeKey:"loose-price" };
-      state.inventory.push(inv);
-      logDailySnapshot(); updateStats(); renderInventory();
+      state.inventory.push(inv); logDailySnapshot(); updateStats(); renderInventory();
     });
   });
 }
@@ -165,22 +151,121 @@ function renderInventory(){
   });
 }
 
-document.addEventListener("DOMContentLoaded", async ()=>{
-  // user id prompt (one-time), kept out of UI
-  state.user = localStorage.getItem(CACHE.USER);
-  if (!state.user){
-    const u = prompt("Enter a username (used to sync your data):");
-    state.user = (u||"guest").trim() || "guest";
-    localStorage.setItem(CACHE.USER, state.user);
-  }
+// --- CSV helpers ---
+const CSV_HEADERS = ["id","productName","setName","qty","gradeKey","costBasis","loose-price","graded-price","new-price","cib-price","manual-only-price","bgs-10-price","condition-17-price","condition-18-price","note"];
 
-  // optimistic local cache while we fetch cloud data
+function toCSVValue(v){
+  if (v == null) return "";
+  const s = String(v);
+  if (/[",\n]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
+  return s;
+}
+function buildCSV(rows){
+  const lines = [];
+  lines.push(CSV_HEADERS.join(","));
+  for (const r of rows){
+    const vals = CSV_HEADERS.map(h => toCSVValue(r[h]));
+    lines.push(vals.join(","));
+  }
+  return lines.join("\\n");
+}
+function parseCSV(text){
+  // simple CSV parser supporting quotes, commas, and newlines
+  const rows = [];
+  let i=0, field="", row=[], inQuotes=false;
+  function pushField(){ row.push(field); field=""; }
+  function pushRow(){ rows.push(row); row=[]; }
+  while (i < text.length){
+    const c = text[i];
+    if (inQuotes){
+      if (c === '"'){
+        if (text[i+1] === '"'){ field+='"'; i+=2; continue; }
+        inQuotes = false; i++; continue;
+      } else { field += c; i++; continue; }
+    } else {
+      if (c === '"'){ inQuotes = true; i++; continue; }
+      if (c === ','){ pushField(); i++; continue; }
+      if (c === '\\n' || c === '\\r'){
+        // handle CRLF/CR
+        if (c === '\\r' && text[i+1] === '\\n') i++;
+        pushField(); pushRow(); i++; continue;
+      }
+      field += c; i++;
+    }
+  }
+  // last field
+  pushField(); pushRow();
+  // map to objects
+  const header = rows.shift() || [];
+  const objs = rows.filter(r => r.some(x => x && x.trim().length)).map(r => {
+    const o = {}; header.forEach((h,idx)=>{ o[h] = r[idx] ?? ""; }); return o;
+  });
+  return { header, rows: objs };
+}
+
+function inventoryToCSVRows(){
+  return state.inventory.map(it => ({
+    id: it.id || "",
+    productName: it.productName || "",
+    setName: it.setName || "",
+    qty: it.qty ?? 1,
+    gradeKey: it.gradeKey || "loose-price",
+    costBasis: ((it.costBasisCents||0)/100).toFixed(2),
+    "loose-price": it.prices?.["loose-price"] ?? "",
+    "graded-price": it.prices?.["graded-price"] ?? "",
+    "new-price": it.prices?.["new-price"] ?? "",
+    "cib-price": it.prices?.["cib-price"] ?? "",
+    "manual-only-price": it.prices?.["manual-only-price"] ?? "",
+    "bgs-10-price": it.prices?.["bgs-10-price"] ?? "",
+    "condition-17-price": it.prices?.["condition-17-price"] ?? "",
+    "condition-18-price": it.prices?.["condition-18-price"] ?? "",
+    note: it.note || ""
+  }));
+}
+function csvRowsToInventory(objs){
+  const inv = [];
+  for (const o of objs){
+    const prices = {
+      "loose-price": numOrNull(o["loose-price"]),
+      "graded-price": numOrNull(o["graded-price"]),
+      "new-price": numOrNull(o["new-price"]),
+      "cib-price": numOrNull(o["cib-price"]),
+      "manual-only-price": numOrNull(o["manual-only-price"]),
+      "bgs-10-price": numOrNull(o["bgs-10-price"]),
+      "condition-17-price": numOrNull(o["condition-17-price"]),
+      "condition-18-price": numOrNull(o["condition-18-price"]),
+    };
+    // prune nulls
+    Object.keys(prices).forEach(k=>{ if (prices[k]==null || prices[k]==="") delete prices[k]; });
+    inv.push({
+      id: o.id || "",
+      productName: o.productName || "",
+      setName: o.setName || "",
+      prices,
+      qty: Number(o.qty || 1),
+      costBasisCents: Math.round(Number(o.costBasis || 0) * 100),
+      note: o.note || "",
+      gradeKey: (o.gradeKey || "loose-price")
+    });
+  }
+  return inv;
+}
+function numOrNull(v){
+  if (v==null || v==="") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.round(n) : null; // expect cents as integer if provided
+}
+
+// --- Wire ---
+document.addEventListener("DOMContentLoaded", async ()=>{
+  state.user = localStorage.getItem(CACHE.USER) || "guest";
+  localStorage.setItem(CACHE.USER, state.user);
+
   try {
     const snap = JSON.parse(localStorage.getItem(CACHE.SNAP)||"null");
     if (snap){ state.inventory=snap.inventory||[]; state.watchlist=snap.watchlist||[]; state.history=snap.history||[]; }
   } catch {}
 
-  // try cloud load
   try {
     const cloud = await cloudLoad(state.user);
     if (cloud){
@@ -188,17 +273,12 @@ document.addEventListener("DOMContentLoaded", async ()=>{
       state.watchlist = Array.isArray(cloud.watchlist) ? cloud.watchlist : [];
       state.history = Array.isArray(cloud.history) ? cloud.history : [];
     }
-  } catch (e) {
-    console.warn("Cloud load failed; using local cache", e);
-  }
+  } catch(e){ console.warn("Cloud load failed", e); }
 
-  // initial render
   updateStats(); renderInventory();
 
-  // search form
   $("#search-form").addEventListener("submit",(e)=>{ e.preventDefault(); const q=$("#q").value.trim(); if(q) doSearch(q); });
 
-  // export/import includes everything
   $("#export-json").addEventListener("click",()=>{
     const blob=new Blob([JSON.stringify({inventory:state.inventory,watchlist:state.watchlist,history:state.history},null,2)],{type:"application/json"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="cardtrack_pro_export.json"; a.click(); URL.revokeObjectURL(url);
@@ -213,6 +293,30 @@ document.addEventListener("DOMContentLoaded", async ()=>{
       logDailySnapshot(); updateStats(); renderInventory();
       await cloudSave(state.user, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
     } catch { alert("Failed to import JSON"); }
+  });
+
+  // CSV export/import
+  $("#export-csv").addEventListener("click",()=>{
+    const rows = inventoryToCSVRows();
+    const csv = buildCSV(rows);
+    const blob = new Blob([csv], { type:"text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="cardtrack_pro_inventory.csv"; a.click(); URL.revokeObjectURL(url);
+  });
+  $("#import-csv").addEventListener("click",()=>$("#import-file-csv").click());
+  $("#import-file-csv").addEventListener("change", async (e)=>{
+    const file=e.target.files?.[0]; if(!file) return;
+    try{
+      const text = await file.text();
+      const parsed = parseCSV(text);
+      // Validate headers contain required keys
+      const need = ["productName","setName","qty","gradeKey","costBasis","note"];
+      const missing = need.filter(h => !parsed.header.includes(h));
+      if (missing.length){ alert("Missing CSV headers: " + missing.join(", ")); return; }
+      const inv = csvRowsToInventory(parsed.rows);
+      state.inventory = inv;
+      logDailySnapshot(); updateStats(); renderInventory();
+      await cloudSave(state.user, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
+    } catch(err){ console.error(err); alert("Failed to import CSV"); }
   });
 
   $("#toggle-history")?.addEventListener("click",()=>{
