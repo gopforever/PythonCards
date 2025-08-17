@@ -1,11 +1,10 @@
-/* CardTrack Pro — Clone to… (between Personal/Sales/Trade) + Multi-Collections + Blobs + CSV */
+/* CardTrack Pro — Set Completion Tracker + Multi-Collections + Blobs + CSV */
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 const fmtUSD = (cents) => (cents==null?0:cents/100).toLocaleString(undefined,{style:"currency",currency:"USD"});
 
 const CACHE = { USER:"ctp.user", SNAP_PREF:"ctp.snap.v1." , COLLECTION:"ctp.collection" };
-const COLLECTIONS = ["Personal","Sales","Trade"];
-const state = { user:null, collection:"Personal", inventory:[], watchlist:[], history:[], chart:null };
+const state = { user:null, collection:"Personal", inventory:[], watchlist:[], history:[], sets:[], chart:null };
 
 function debounce(fn, ms=600){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
 
@@ -24,7 +23,7 @@ const cloudSave = debounce(async (user, collection, data)=>{
 
 // local snapshot helpers
 function getLocalSnap(col){
-  try { return JSON.parse(localStorage.getItem(CACHE.SNAP_PREF + col) || "null") || {inventory:[],watchlist:[],history:[]}; } catch { return {inventory:[],watchlist:[],history:[]}; }
+  try { return JSON.parse(localStorage.getItem(CACHE.SNAP_PREF + col) || "null") || {inventory:[],watchlist:[],history:[],sets:[]}; } catch { return {inventory:[],watchlist:[],history:[],sets:[]}; }
 }
 function setLocalSnap(col, data){
   localStorage.setItem(CACHE.SNAP_PREF + col, JSON.stringify(data));
@@ -56,8 +55,8 @@ function updateStats(){
   $("#stat-cost").textContent = fmtUSD(t.cost);
   $("#stat-pl").textContent = fmtUSD(t.pl);
   renderChart();
-  setLocalSnap(state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
-  cloudSave(state.user, state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
+  setLocalSnap(state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history, sets:state.sets });
+  cloudSave(state.user, state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history, sets:state.sets });
 }
 
 // --- Chart ---
@@ -74,7 +73,7 @@ function renderChart(){
   } else { state.chart.data.labels=labels; state.chart.data.datasets[0].data=est; state.chart.data.datasets[1].data=cost; state.chart.update(); }
 }
 
-// --- UI helpers ---
+// --- Search ---
 function priceKeysDisplay(obj){
   const preferred=["loose-price","graded-price","manual-only-price","new-price","cib-price","bgs-10-price","condition-17-price","condition-18-price"];
   const keys=preferred.filter(k=>obj[k]!=null); Object.keys(obj).forEach(k=>{ if (/-price$/.test(k) && !keys.includes(k)) keys.push(k); }); return keys;
@@ -98,12 +97,16 @@ function renderResults(products){
     const keys = priceKeysDisplay(p);
     const priceRows = keys.map(k=>`<div class="flex items-center justify-between text-sm"><div class="text-slate-300/80">${k.replace(/-/g," ")}</div><div class="font-semibold price">${fmtUSD(p[k])}</div></div>`).join("");
     const card=document.createElement("div"); card.className="glass rounded-2xl p-4";
+    const trackSetLink = p["console-name"] ? `<a class="linkish cursor-pointer" data-track-set="${p["console-name"].replace(/\"/g,'&quot;')}">☆ Track Set</a>` : "";
     card.innerHTML=`
       <div class="flex items-start justify-between gap-3 min-w-0">
         <div class="min-w-0"><div class="text-sm text-slate-300/70 wrap-anywhere">${p["console-name"]||""}</div><div class="font-semibold wrap-anywhere">${p["product-name"]||""}</div></div>
-        <button class="shrink-0 rounded-lg px-3 py-1 bg-sky-400/20 border border-sky-400/40 text-sm hover:bg-sky-400/30" data-id="${p.id}" data-json='${JSON.stringify(p).replaceAll("'","&apos;")}'>
-          + Add
-        </button>
+        <div class="shrink-0 flex items-center gap-3">
+          ${trackSetLink}
+          <button class="rounded-lg px-3 py-1 bg-sky-400/20 border border-sky-400/40 text-sm hover:bg-sky-400/30" data-id="${p.id}" data-json='${JSON.stringify(p).replaceAll("'","&apos;")}'>
+            + Add
+          </button>
+        </div>
       </div>
       <div class="mt-3 space-y-1">${priceRows}</div>`;
     container.appendChild(card);
@@ -114,38 +117,18 @@ function renderResults(products){
       const inv = { id:data.id, productName:data["product-name"], setName:data["console-name"],
         prices:Object.fromEntries(Object.entries(data).filter(([k])=>/-price$/.test(k)||["loose-price","new-price","graded-price","cib-price","manual-only-price","bgs-10-price","condition-17-price","condition-18-price"].includes(k))),
         qty:1, costBasisCents:0, note:"", gradeKey:"loose-price" };
-      state.inventory.push(inv); logDailySnapshot(); updateStats(); renderInventory();
+      state.inventory.push(inv); logDailySnapshot(); updateStats(); renderInventory(); renderSets(); // update sets progress
+    });
+  });
+  container.querySelectorAll("[data-track-set]").forEach(a => {
+    a.addEventListener("click", async ()=>{
+      const setName = a.getAttribute("data-track-set");
+      await addOrRefreshSet(setName, true);
     });
   });
 }
 
-// --- Clone to… ---
-function normalizeCollection(input){
-  const s = (input||"").toLowerCase();
-  if (s.startsWith("p")) return "Personal";
-  if (s.startsWith("s")) return "Sales";
-  if (s.startsWith("t")) return "Trade";
-  return null;
-}
-async function cloneToCollection(item, target){
-  if (!COLLECTIONS.includes(target)) { alert("Invalid collection"); return; }
-  // load existing target snapshot (local first)
-  let tgtSnap = getLocalSnap(target);
-  // clone item (shallow is fine; ensure a new object)
-  const clone = JSON.parse(JSON.stringify(item));
-  tgtSnap.inventory = Array.isArray(tgtSnap.inventory) ? tgtSnap.inventory.slice() : [];
-  tgtSnap.inventory.push(clone);
-  setLocalSnap(target, tgtSnap);
-  // push to cloud (best-effort)
-  try{
-    await cloudSave(state.user, target, { inventory:tgtSnap.inventory, watchlist:tgtSnap.watchlist||[], history:tgtSnap.history||[] });
-    alert(`Cloned to ${target}`);
-  } catch(e){
-    console.warn("Cloud save failed for clone", e);
-    alert(`Cloned to ${target} (will sync when online)`);
-  }
-}
-
+// --- Inventory UI ---
 function renderInventory(){
   const list=$("#inventory-list"); list.innerHTML="";
   if (!state.inventory.length){ list.innerHTML=`<div class="col-span-full text-slate-300/80">No items in ${state.collection}. Use search to add cards.</div>`; return; }
@@ -155,14 +138,8 @@ function renderInventory(){
     const row=document.createElement("div"); row.className="glass rounded-2xl p-4";
     row.innerHTML=`
       <div class="flex items-start justify-between gap-3 min-w-0">
-        <div class="min-w-0">
-          <div class="text-sm text-slate-300/70 wrap-anywhere">${it.setName||""}</div>
-          <div class="font-semibold wrap-anywhere">${it.productName||""}</div>
-        </div>
-        <div class="shrink-0 flex items-center gap-3">
-          <a class="linkish cursor-pointer" data-action="clone">Clone to…</a>
-          <button class="text-slate-300/80 hover:text-red-300" data-action="remove" title="Remove">✖</button>
-        </div>
+        <div class="min-w-0"><div class="text-sm text-slate-300/70 wrap-anywhere">${it.setName||""}</div><div class="font-semibold wrap-anywhere">${it.productName||""}</div></div>
+        <button class="shrink-0 text-slate-300/80 hover:text-red-300" data-action="remove" title="Remove">✖</button>
       </div>
       <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
         <label class="chip rounded-xl px-3 py-2 flex items-center gap-2 overflow-hidden">
@@ -185,34 +162,74 @@ function renderInventory(){
       <textarea placeholder="Notes (purchase details, cert #, comps)" data-field="note" class="mt-3 w-full chip rounded-xl px-3 py-2 bg-transparent outline-none wrap-anywhere">${it.note||""}</textarea>`;
     list.appendChild(row);
 
-    row.querySelector('[data-field="qty"]').addEventListener("input",(e)=>{ it.qty=Number(e.target.value||1); logDailySnapshot(); updateStats(); renderInventory(); });
+    row.querySelector('[data-field="qty"]').addEventListener("input",(e)=>{ it.qty=Number(e.target.value||1); logDailySnapshot(); updateStats(); renderInventory(); renderSets(); });
     row.querySelector('[data-field="grade"]').addEventListener("change",(e)=>{ it.gradeKey=e.target.value; logDailySnapshot(); updateStats(); renderInventory(); });
     row.querySelector('[data-field="cost"]').addEventListener("input",(e)=>{ it.costBasisCents=Math.round(Number(e.target.value||0)*100); logDailySnapshot(); updateStats(); renderInventory(); });
     row.querySelector('[data-field="note"]').addEventListener("input",(e)=>{ it.note=e.target.value||""; updateStats(); });
-    row.querySelector('[data-action="remove"]').addEventListener("click",()=>{ state.inventory.splice(idx,1); logDailySnapshot(); updateStats(); renderInventory(); });
-    row.querySelector('[data-action="clone"]').addEventListener("click", async ()=>{
-      const targetInput = prompt("Clone to which collection? (Personal / Sales / Trade)", state.collection === "Personal" ? "Sales" : "Personal");
-      const target = normalizeCollection(targetInput);
-      if (!target) return;
-      await cloneToCollection(it, target);
-    });
+    row.querySelector('[data-action="remove"]').addEventListener("click",()=>{ state.inventory.splice(idx,1); logDailySnapshot(); updateStats(); renderInventory(); renderSets(); });
   });
 }
 
-// --- CSV helpers ---
-const CSV_HEADERS = ["id","productName","setName","qty","gradeKey","costBasis","loose-price","graded-price","new-price","cib-price","manual-only-price","bgs-10-price","condition-17-price","condition-18-price","note"];
+// --- Sets ---
+async function fetchSetChecklist(setName){
+  const r = await fetch(`/.netlify/functions/setlist?q=${encodeURIComponent(setName)}`);
+  if (!r.ok) throw new Error("setlist fetch failed");
+  return await r.json();
+}
+async function addOrRefreshSet(setName, showAlert=false){
+  if (!setName) return;
+  try{
+    const data = await fetchSetChecklist(setName);
+    if (!data || !Array.isArray(data.cards) || data.cards.length===0){ if(showAlert) alert("No checklist found for that set."); return; }
+    let s = state.sets.find(x => (x.title||x.key) === setName);
+    if (!s){
+      s = { key: setName, title: setName, total: data.total||data.cards.length, cards: data.cards, lastSync: new Date().toISOString() };
+      state.sets.push(s);
+    } else {
+      s.cards = data.cards; s.total = data.total||data.cards.length; s.lastSync = new Date().toISOString();
+    }
+    updateStats(); renderSets(); if (showAlert) alert(`Tracking set: ${setName}`);
+  } catch(e){ console.warn(e); if (showAlert) alert("Failed to load set checklist."); }
+}
+function computeOwnedForSet(s){
+  const ids = new Set(state.inventory.map(it => it.id));
+  let owned = 0;
+  for (const c of (s.cards||[])){ if (ids.has(c.id)) owned++; }
+  return owned;
+}
+function renderSets(){
+  const wrap = $("#sets-list"); if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!state.sets.length){ wrap.innerHTML = `<div class="text-slate-300/80 text-sm">No sets yet. Click <span class="underline">+ Add</span> or use “☆ Track Set” on a search result.</div>`; return; }
+  state.sets.forEach((s, idx)=>{
+    const owned = computeOwnedForSet(s);
+    const pct = s.total ? Math.round((owned / s.total) * 100) : 0;
+    const row = document.createElement("div");
+    row.innerHTML = `
+      <div class="space-y-1">
+        <div class="flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <div class="font-medium text-sm wrap-anywhere">${s.title}</div>
+            <div class="text-xs text-slate-300/70">${owned}/${s.total} • ${pct}%</div>
+          </div>
+          <div class="flex items-center gap-3 shrink-0">
+            <a class="linkish cursor-pointer" data-action="refresh">Sync</a>
+            <a class="linkish cursor-pointer" data-action="remove">Remove</a>
+          </div>
+        </div>
+        <div class="bar"><div style="width:${pct}%;"></div></div>
+      </div>
+    `;
+    wrap.appendChild(row);
+    row.querySelector('[data-action="refresh"]').addEventListener("click", ()=> addOrRefreshSet(s.title, true));
+    row.querySelector('[data-action="remove"]').addEventListener("click", ()=>{ state.sets.splice(idx,1); updateStats(); renderSets(); });
+  });
+}
 
-function toCSVValue(v){
-  if (v == null) return "";
-  const s = String(v);
-  if (/[\",\\n]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
-  return s;
-}
-function buildCSV(rows){
-  const lines = []; lines.push(CSV_HEADERS.join(","));
-  for (const r of rows){ const vals = CSV_HEADERS.map(h => toCSVValue(r[h])); lines.push(vals.join(",")); }
-  return lines.join("\\n");
-}
+// --- CSV helpers (existing) ---
+const CSV_HEADERS = ["id","productName","setName","qty","gradeKey","costBasis","loose-price","graded-price","new-price","cib-price","manual-only-price","bgs-10-price","condition-17-price","condition-18-price","note"];
+function toCSVValue(v){ if (v == null) return ""; const s = String(v); if (/[\",\\n]/.test(s)) return `"${s.replace(/"/g,'""')}"`; return s; }
+function buildCSV(rows){ const lines = []; lines.push(CSV_HEADERS.join(",")); for (const r of rows){ const vals = CSV_HEADERS.map(h => toCSVValue(r[h])); lines.push(vals.join(",")); } return lines.join("\\n"); }
 function parseCSV(text){
   const rows = []; let i=0, field="", row=[], inQuotes=false;
   function pushField(){ row.push(field); field=""; }
@@ -231,9 +248,7 @@ function parseCSV(text){
   }
   pushField(); pushRow();
   const header = rows.shift() || [];
-  const objs = rows.filter(r => r.some(x => x && x.trim().length)).map(r => {
-    const o = {}; header.forEach((h,idx)=>{ o[h] = r[idx] ?? ""; }); return o;
-  });
+  const objs = rows.filter(r => r.some(x => x && x.trim().length)).map(r => { const o = {}; header.forEach((h,idx)=>{ o[h] = r[idx] ?? ""; }); return o; });
   return { header, rows: objs };
 }
 function inventoryToCSVRows(){
@@ -282,13 +297,8 @@ function csvRowsToInventory(objs){
   }
   return inv;
 }
-function numOrNull(v){
-  if (v==null || v==="") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.round(n) : null;
-}
+function numOrNull(v){ if (v==null || v==="") return null; const n = Number(v); return Number.isFinite(n) ? Math.round(n) : null; }
 
-// --- CSV Template ---
 function buildTemplateCSV(includeExample){
   const rows = [];
   if (includeExample){
@@ -318,11 +328,11 @@ document.addEventListener("DOMContentLoaded", async ()=>{
   state.user = localStorage.getItem(CACHE.USER) || "guest";
   localStorage.setItem(CACHE.USER, state.user);
   state.collection = localStorage.getItem(CACHE.COLLECTION) || "Personal";
-  const colSel = $("#collection-select"); colSel.value = state.collection;
+  $("#collection-select").value = state.collection;
 
   try {
     const snap = getLocalSnap(state.collection);
-    state.inventory=snap.inventory||[]; state.watchlist=snap.watchlist||[]; state.history=snap.history||[];
+    state.inventory=snap.inventory||[]; state.watchlist=snap.watchlist||[]; state.history=snap.history||[]; state.sets=snap.sets||[];
   } catch {}
 
   try {
@@ -331,26 +341,28 @@ document.addEventListener("DOMContentLoaded", async ()=>{
       state.inventory = Array.isArray(cloud.inventory) ? cloud.inventory : [];
       state.watchlist = Array.isArray(cloud.watchlist) ? cloud.watchlist : [];
       state.history = Array.isArray(cloud.history) ? cloud.history : [];
+      state.sets = Array.isArray(cloud.sets) ? cloud.sets : [];
     }
   } catch(e){ console.warn("Cloud load failed", e); }
 
-  updateStats(); renderInventory();
+  updateStats(); renderInventory(); renderSets();
 
-  colSel.addEventListener("change", async (e)=>{
+  $("#collection-select").addEventListener("change", async (e)=>{
     state.collection = e.target.value || "Personal";
     localStorage.setItem(CACHE.COLLECTION, state.collection);
     try{
       const snap = getLocalSnap(state.collection);
-      state.inventory=snap.inventory||[]; state.watchlist=snap.watchlist||[]; state.history=snap.history||[];
-    } catch { state.inventory=[]; state.watchlist=[]; state.history=[]; }
-    updateStats(); renderInventory();
+      state.inventory=snap.inventory||[]; state.watchlist=snap.watchlist||[]; state.history=snap.history||[]; state.sets=snap.sets||[];
+    } catch { state.inventory=[]; state.watchlist=[]; state.history=[]; state.sets=[]; }
+    updateStats(); renderInventory(); renderSets();
     try {
       const cloud = await cloudLoad(state.user, state.collection);
       if (cloud){
         state.inventory = Array.isArray(cloud.inventory) ? cloud.inventory : [];
         state.watchlist = Array.isArray(cloud.watchlist) ? cloud.watchlist : [];
         state.history = Array.isArray(cloud.history) ? cloud.history : [];
-        updateStats(); renderInventory();
+        state.sets = Array.isArray(cloud.sets) ? cloud.sets : [];
+        updateStats(); renderInventory(); renderSets();
       }
     } catch(e){ console.warn("Cloud load failed", e); }
   });
@@ -358,7 +370,7 @@ document.addEventListener("DOMContentLoaded", async ()=>{
   $("#search-form").addEventListener("submit",(e)=>{ e.preventDefault(); const q=$("#q").value.trim(); if(q) doSearch(q); });
 
   $("#export-json").addEventListener("click",()=>{
-    const blob=new Blob([JSON.stringify({inventory:state.inventory,watchlist:state.watchlist,history:state.history},null,2)],{type:"application/json"});
+    const blob=new Blob([JSON.stringify({inventory:state.inventory,watchlist:state.watchlist,history:state.history,sets:state.sets},null,2)],{type:"application/json"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`cardtrack_pro_export_${state.collection}.json`; a.click(); URL.revokeObjectURL(url);
   });
   $("#import-json").addEventListener("click",()=>$("#import-file").click());
@@ -368,8 +380,9 @@ document.addEventListener("DOMContentLoaded", async ()=>{
       if(Array.isArray(obj.inventory)) state.inventory=obj.inventory;
       if(Array.isArray(obj.watchlist)) state.watchlist=obj.watchlist;
       if(Array.isArray(obj.history)) state.history=obj.history;
-      logDailySnapshot(); updateStats(); renderInventory();
-      await cloudSave(state.user, state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
+      if(Array.isArray(obj.sets)) state.sets=obj.sets;
+      logDailySnapshot(); updateStats(); renderInventory(); renderSets();
+      await cloudSave(state.user, state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history, sets:state.sets });
     } catch { alert("Failed to import JSON"); }
   });
 
@@ -390,8 +403,8 @@ document.addEventListener("DOMContentLoaded", async ()=>{
       if (missing.length){ alert("Missing CSV headers: " + missing.join(", ")); return; }
       const inv = csvRowsToInventory(parsed.rows);
       state.inventory = inv;
-      logDailySnapshot(); updateStats(); renderInventory();
-      await cloudSave(state.user, state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
+      logDailySnapshot(); updateStats(); renderInventory(); renderSets();
+      await cloudSave(state.user, state.collection, { inventory:state.inventory, watchlist:state.watchlist, history:state.history, sets:state.sets });
     } catch(err){ console.error(err); alert("Failed to import CSV"); }
   });
 
@@ -404,5 +417,13 @@ document.addEventListener("DOMContentLoaded", async ()=>{
 
   $("#toggle-history")?.addEventListener("click",()=>{
     const card=$("#history-card"); if (!card) return; card.classList.toggle("hidden"); if (!card.classList.contains("hidden")) renderChart();
+  });
+  $("#toggle-sets")?.addEventListener("click",()=>{
+    const card=$("#sets-card"); if (!card) return; card.classList.toggle("hidden"); if (!card.classList.contains("hidden")) renderSets();
+  });
+  $("#add-set")?.addEventListener("click", async ()=>{
+    const q = prompt("Enter a set name exactly as shown in results (e.g., 'Football > 2017 Panini Prizm')");
+    if (!q) return;
+    await addOrRefreshSet(q, true);
   });
 });

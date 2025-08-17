@@ -16,7 +16,7 @@ export default async (req) => {
     if (!user) return new Response(JSON.stringify({ error: 'missing user' }), { status: 400, headers: { 'content-type': 'application/json' } });
     const key = `cardtrack/inventory/${encodeURIComponent(user)}/${encodeURIComponent(collection)}`;
     const data = await client.getJSON(key);
-    return new Response(JSON.stringify(data || { inventory: [], watchlist: [], history: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify(data || { inventory: [], watchlist: [], history: [], sets: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
   }
 
   if (method === 'POST') {

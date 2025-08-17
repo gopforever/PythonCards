@@ -18,6 +18,8 @@
     .wrap-anywhere{overflow-wrap:anywhere;word-break:break-word;hyphens:auto}
     .linkish{ color: rgba(255,255,255,.8); font-size: 11px; }
     .linkish:hover{ color: #fff; text-decoration: underline; }
+    .bar { height: 6px; border-radius: 9999px; background: rgba(255,255,255,.08); overflow: hidden; }
+    .bar > div { height: 100%; background: rgba(125, 211, 252, .7); }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -66,6 +68,7 @@
                 <option>Trade</option>
               </select>
               <button id="toggle-history" class="text-xs rounded-lg px-2 py-1 bg-white/5 border border-white/10 hover:bg-white/10">History</button>
+              <button id="toggle-sets" class="text-xs rounded-lg px-2 py-1 bg-white/5 border border-white/10 hover:bg-white/10">Sets</button>
             </div>
           </div>
           <div class="grid grid-cols-2 gap-3 text-sm mt-2">
@@ -89,6 +92,15 @@
           <div id="history-card" class="mt-3 hidden">
             <div class="chip rounded-xl p-3">
               <canvas id="valueChart" height="200"></canvas>
+            </div>
+          </div>
+          <div id="sets-card" class="mt-3 hidden">
+            <div class="chip rounded-xl p-3 space-y-2">
+              <div class="flex items-center justify-between">
+                <div class="font-semibold text-sm">Tracked sets</div>
+                <a id="add-set" class="linkish cursor-pointer">+ Add</a>
+              </div>
+              <div id="sets-list" class="space-y-3"></div>
             </div>
           </div>
           <button id="export-json" class="mt-4 w-full rounded-xl bg-white/5 border border-white/10 py-2 hover:bg-white/10">Export JSON</button>
