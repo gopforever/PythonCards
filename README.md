@@ -1,15 +1,16 @@
-# Edit Cards & Show Paid (avg) — CardTrack Pro
+# Functions Patch (502 fix)
 
-## What’s new
-- **Paid (avg)** now visible on each inventory card
-  - Shows **per-unit average paid** and **total paid**
-- **Edit** action on every inventory item
-  - Prompt-based editor: title, set, qty, grade key, price paid (total), notes
-- **Add flow** enhancement
-  - After you click **+ Add**, you can optionally enter **price paid** right away
-- Fully persisted to **Netlify Blobs** and local snapshot
+This patch switches to **classic Netlify Functions** signatures and `process.env` to avoid 502s.
 
-## Deploy
-1) Replace your files with this bundle.
-2) Ensure `SPORTSCARDSPRO_TOKEN` is set in Netlify (unchanged).
-3) Deploy.
+## What to do
+1. Unzip and replace your repo's `netlify/functions/` folder with the one in this zip.
+2. Ensure the env var is set in Netlify → Site settings → Environment:
+   - `SPORTSCARDSPRO_TOKEN` = your SportsCardsPro API token
+3. Redeploy.
+
+## Notes
+- Storage uses Netlify **Blobs** (`@netlify/blobs`) as before.
+- Responses include clearer JSON errors if something goes wrong.
+- Frontend code stays the same — this is a serverless-only patch.
+
+If you still see a 502 after this, check the **Function logs** in Netlify to see the exact error payload returned by `storage` or `prices`.
