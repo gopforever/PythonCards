@@ -1,4 +1,4 @@
-/* CardTrack Pro — CSV Import/Export (UI unchanged) + Blobs persistence */
+/* CardTrack Pro — CSV Template Generator + CSV Import/Export + Blobs persistence (UI unchanged) */
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 const fmtUSD = (cents) => (cents==null?0:cents/100).toLocaleString(undefined,{style:"currency",currency:"USD"});
@@ -157,7 +157,7 @@ const CSV_HEADERS = ["id","productName","setName","qty","gradeKey","costBasis","
 function toCSVValue(v){
   if (v == null) return "";
   const s = String(v);
-  if (/[",\n]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
+  if (/[\",\\n]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
   return s;
 }
 function buildCSV(rows){
@@ -170,39 +170,28 @@ function buildCSV(rows){
   return lines.join("\\n");
 }
 function parseCSV(text){
-  // simple CSV parser supporting quotes, commas, and newlines
-  const rows = [];
-  let i=0, field="", row=[], inQuotes=false;
+  const rows = []; let i=0, field="", row=[], inQuotes=false;
   function pushField(){ row.push(field); field=""; }
   function pushRow(){ rows.push(row); row=[]; }
   while (i < text.length){
     const c = text[i];
     if (inQuotes){
-      if (c === '"'){
-        if (text[i+1] === '"'){ field+='"'; i+=2; continue; }
-        inQuotes = false; i++; continue;
-      } else { field += c; i++; continue; }
+      if (c === '"'){ if (text[i+1] === '"'){ field+='"'; i+=2; } else { inQuotes=false; i++; } }
+      else { field += c; i++; }
     } else {
-      if (c === '"'){ inQuotes = true; i++; continue; }
-      if (c === ','){ pushField(); i++; continue; }
-      if (c === '\\n' || c === '\\r'){
-        // handle CRLF/CR
-        if (c === '\\r' && text[i+1] === '\\n') i++;
-        pushField(); pushRow(); i++; continue;
-      }
-      field += c; i++;
+      if (c === '"'){ inQuotes=true; i++; }
+      else if (c === ','){ pushField(); i++; }
+      else if (c === '\\n' || c === '\\r'){ if (c==='\\r' && text[i+1]==='\\n') i++; pushField(); pushRow(); i++; }
+      else { field += c; i++; }
     }
   }
-  // last field
   pushField(); pushRow();
-  // map to objects
   const header = rows.shift() || [];
   const objs = rows.filter(r => r.some(x => x && x.trim().length)).map(r => {
     const o = {}; header.forEach((h,idx)=>{ o[h] = r[idx] ?? ""; }); return o;
   });
   return { header, rows: objs };
 }
-
 function inventoryToCSVRows(){
   return state.inventory.map(it => ({
     id: it.id || "",
@@ -235,7 +224,6 @@ function csvRowsToInventory(objs){
       "condition-17-price": numOrNull(o["condition-17-price"]),
       "condition-18-price": numOrNull(o["condition-18-price"]),
     };
-    // prune nulls
     Object.keys(prices).forEach(k=>{ if (prices[k]==null || prices[k]==="") delete prices[k]; });
     inv.push({
       id: o.id || "",
@@ -253,7 +241,32 @@ function csvRowsToInventory(objs){
 function numOrNull(v){
   if (v==null || v==="") return null;
   const n = Number(v);
-  return Number.isFinite(n) ? Math.round(n) : null; // expect cents as integer if provided
+  return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+// --- CSV template ---
+function buildTemplateCSV(includeExample){
+  const rows = [];
+  if (includeExample){
+    rows.push({
+      id: "12345",
+      productName: "2017 Prizm Patrick Mahomes #269 Rookie",
+      setName: "Football > 2017 Panini Prizm",
+      qty: 1,
+      gradeKey: "graded-price",
+      costBasis: "250.00",
+      "loose-price": "",
+      "graded-price": 32500,
+      "new-price": "",
+      "cib-price": "",
+      "manual-only-price": "",
+      "bgs-10-price": "",
+      "condition-17-price": "",
+      "condition-18-price": "",
+      note: "PSA 10; bought at show"
+    });
+  }
+  return buildCSV(rows);
 }
 
 // --- Wire ---
@@ -295,7 +308,6 @@ document.addEventListener("DOMContentLoaded", async ()=>{
     } catch { alert("Failed to import JSON"); }
   });
 
-  // CSV export/import
   $("#export-csv").addEventListener("click",()=>{
     const rows = inventoryToCSVRows();
     const csv = buildCSV(rows);
@@ -308,7 +320,6 @@ document.addEventListener("DOMContentLoaded", async ()=>{
     try{
       const text = await file.text();
       const parsed = parseCSV(text);
-      // Validate headers contain required keys
       const need = ["productName","setName","qty","gradeKey","costBasis","note"];
       const missing = need.filter(h => !parsed.header.includes(h));
       if (missing.length){ alert("Missing CSV headers: " + missing.join(", ")); return; }
@@ -317,6 +328,14 @@ document.addEventListener("DOMContentLoaded", async ()=>{
       logDailySnapshot(); updateStats(); renderInventory();
       await cloudSave(state.user, { inventory:state.inventory, watchlist:state.watchlist, history:state.history });
     } catch(err){ console.error(err); alert("Failed to import CSV"); }
+  });
+
+  // CSV Template generator
+  $("#csv-template").addEventListener("click",()=>{
+    const includeExample = confirm("Include a sample example row?");
+    const csv = buildTemplateCSV(includeExample);
+    const blob = new Blob([csv], { type:"text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="cardtrack_pro_template.csv"; a.click(); URL.revokeObjectURL(url);
   });
 
   $("#toggle-history")?.addEventListener("click",()=>{
