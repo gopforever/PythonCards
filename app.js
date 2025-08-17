@@ -1,10 +1,10 @@
-/* CardTrack Pro — Set Completion Tracker + Multi-Collections + Blobs + CSV */
+/* CardTrack Pro — Set Details View (Owned vs Missing + Quick Add) */
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 const fmtUSD = (cents) => (cents==null?0:cents/100).toLocaleString(undefined,{style:"currency",currency:"USD"});
 
 const CACHE = { USER:"ctp.user", SNAP_PREF:"ctp.snap.v1." , COLLECTION:"ctp.collection" };
-const state = { user:null, collection:"Personal", inventory:[], watchlist:[], history:[], sets:[], chart:null };
+const state = { user:null, collection:"Personal", inventory:[], watchlist:[], history:[], sets:[], chart:null, expandedSets:{} };
 
 function debounce(fn, ms=600){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
 
@@ -14,20 +14,12 @@ async function cloudLoad(user, collection){
   return await res.json();
 }
 const cloudSave = debounce(async (user, collection, data)=>{
-  await fetch(`/.netlify/functions/storage`, {
-    method:"POST",
-    headers:{ "content-type":"application/json" },
-    body: JSON.stringify({ user, collection, data })
-  });
+  await fetch(`/.netlify/functions/storage`, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ user, collection, data }) });
 }, 600);
 
 // local snapshot helpers
-function getLocalSnap(col){
-  try { return JSON.parse(localStorage.getItem(CACHE.SNAP_PREF + col) || "null") || {inventory:[],watchlist:[],history:[],sets:[]}; } catch { return {inventory:[],watchlist:[],history:[],sets:[]}; }
-}
-function setLocalSnap(col, data){
-  localStorage.setItem(CACHE.SNAP_PREF + col, JSON.stringify(data));
-}
+function getLocalSnap(col){ try { return JSON.parse(localStorage.getItem(CACHE.SNAP_PREF + col) || "null") || {inventory:[],watchlist:[],history:[],sets:[]}; } catch { return {inventory:[],watchlist:[],history:[],sets:[]}; } }
+function setLocalSnap(col, data){ localStorage.setItem(CACHE.SNAP_PREF + col, JSON.stringify(data)); }
 
 // --- Pricing calc ---
 function estimateItemValue(it){
@@ -117,7 +109,7 @@ function renderResults(products){
       const inv = { id:data.id, productName:data["product-name"], setName:data["console-name"],
         prices:Object.fromEntries(Object.entries(data).filter(([k])=>/-price$/.test(k)||["loose-price","new-price","graded-price","cib-price","manual-only-price","bgs-10-price","condition-17-price","condition-18-price"].includes(k))),
         qty:1, costBasisCents:0, note:"", gradeKey:"loose-price" };
-      state.inventory.push(inv); logDailySnapshot(); updateStats(); renderInventory(); renderSets(); // update sets progress
+      state.inventory.push(inv); logDailySnapshot(); updateStats(); renderInventory(); renderSets();
     });
   });
   container.querySelectorAll("[data-track-set]").forEach(a => {
@@ -170,10 +162,15 @@ function renderInventory(){
   });
 }
 
-// --- Sets ---
+// --- Sets (with details) ---
 async function fetchSetChecklist(setName){
   const r = await fetch(`/.netlify/functions/setlist?q=${encodeURIComponent(setName)}`);
   if (!r.ok) throw new Error("setlist fetch failed");
+  return await r.json();
+}
+async function fetchProductById(id){
+  const r = await fetch(`/.netlify/functions/prices?type=product&id=${encodeURIComponent(id)}`);
+  if (!r.ok) throw new Error("product fetch failed");
   return await r.json();
 }
 async function addOrRefreshSet(setName, showAlert=false){
@@ -195,22 +192,62 @@ function computeOwnedForSet(s){
   const ids = new Set(state.inventory.map(it => it.id));
   let owned = 0;
   for (const c of (s.cards||[])){ if (ids.has(c.id)) owned++; }
-  return owned;
+  return { owned, total: s.total || (s.cards?.length||0) };
+}
+function makeSetDetailsHTML(s, start=0, batch=20){
+  const invIds = new Set(state.inventory.map(it => it.id));
+  const owned = (s.cards||[]).filter(c => invIds.has(c.id));
+  const missing = (s.cards||[]).filter(c => !invIds.has(c.id));
+  const slice = (arr) => arr.slice(start, start+batch);
+  const ownSlice = slice(owned);
+  const missSlice = slice(missing);
+  const missIdsCSV = missSlice.map(m=>m.id).join(",");
+
+  const li = (c, own=false) => `<div class="flex items-center justify-between gap-2 text-xs">
+    <div class="min-w-0 wrap-anywhere">${c.number?`#${c.number} — `:""}${c.name}</div>
+    ${own ? `<span class="text-emerald-300/80">Owned</span>` : `<a class="linkish cursor-pointer" data-action="add-one" data-id="${c.id}">Add</a>`}
+  </div>`;
+
+  return `
+    <div class="mt-2 rounded-xl bg-white/5 border border-white/10 p-3 space-y-3">
+      <div class="flex items-center justify-between">
+        <div class="text-xs text-slate-300/70">Showing ${start+1}-${Math.min(start+batch, Math.max(owned.length, missing.length))} of ${Math.max(owned.length, missing.length)} per list</div>
+        <div class="flex items-center gap-2">
+          ${missSlice.length ? `<button class="text-xs rounded-lg px-2 py-1 bg-sky-400/20 border border-sky-400/40 hover:bg-sky-400/30" data-action="add-visible" data-ids="${missIdsCSV}">Add all visible missing</button>` : ""}
+          ${(start+batch) < Math.max(owned.length, missing.length) ? `<a class="linkish cursor-pointer" data-action="more" data-next="${start+batch}">Show more</a>` : ""}
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <div class="font-medium text-sm mb-1">Owned (${owned.length})</div>
+          <div class="space-y-1">${ownSlice.map(c=>li(c,true)).join("") || `<div class="text-xs text-slate-300/70">None yet</div>`}</div>
+        </div>
+        <div>
+          <div class="font-medium text-sm mb-1">Missing (${missing.length})</div>
+          <div class="space-y-1">${missSlice.map(c=>li(c,false)).join("") || `<div class="text-xs text-slate-300/70">All caught up 🎉</div>`}</div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 function renderSets(){
   const wrap = $("#sets-list"); if (!wrap) return;
   wrap.innerHTML = "";
   if (!state.sets.length){ wrap.innerHTML = `<div class="text-slate-300/80 text-sm">No sets yet. Click <span class="underline">+ Add</span> or use “☆ Track Set” on a search result.</div>`; return; }
   state.sets.forEach((s, idx)=>{
-    const owned = computeOwnedForSet(s);
-    const pct = s.total ? Math.round((owned / s.total) * 100) : 0;
+    const {owned, total} = computeOwnedForSet(s);
+    const pct = total ? Math.round((owned / total) * 100) : 0;
     const row = document.createElement("div");
+    const isOpen = !!state.expandedSets[s.title];
     row.innerHTML = `
-      <div class="space-y-1">
+      <div class="space-y-2">
         <div class="flex items-center justify-between gap-2">
-          <div class="min-w-0">
-            <div class="font-medium text-sm wrap-anywhere">${s.title}</div>
-            <div class="text-xs text-slate-300/70">${owned}/${s.total} • ${pct}%</div>
+          <div class="min-w-0 flex items-center gap-2">
+            <button class="text-xs rounded-md px-2 py-1 bg-white/5 border border-white/10 hover:bg-white/10" data-action="toggle">${isOpen ? "▾" : "▸"}</button>
+            <div>
+              <div class="font-medium text-sm wrap-anywhere">${s.title}</div>
+              <div class="text-xs text-slate-300/70">${owned}/${total} • ${pct}%</div>
+            </div>
           </div>
           <div class="flex items-center gap-3 shrink-0">
             <a class="linkish cursor-pointer" data-action="refresh">Sync</a>
@@ -218,15 +255,68 @@ function renderSets(){
           </div>
         </div>
         <div class="bar"><div style="width:${pct}%;"></div></div>
+        <div class="details ${isOpen ? "" : "hidden"}" data-start="0"></div>
       </div>
     `;
     wrap.appendChild(row);
+
+    const details = row.querySelector(".details");
+    if (isOpen){ details.innerHTML = makeSetDetailsHTML(s, Number(details.getAttribute("data-start"))||0, 20); }
+
+    row.querySelector('[data-action="toggle"]').addEventListener("click", ()=>{
+      const open = !state.expandedSets[s.title];
+      state.expandedSets[s.title] = open;
+      renderSets();
+    });
     row.querySelector('[data-action="refresh"]').addEventListener("click", ()=> addOrRefreshSet(s.title, true));
     row.querySelector('[data-action="remove"]').addEventListener("click", ()=>{ state.sets.splice(idx,1); updateStats(); renderSets(); });
+
+    row.addEventListener("click", async (e)=>{
+      const t = e.target;
+      if (!(t instanceof HTMLElement)) return;
+      if (t.dataset.action === "more"){
+        const next = Number(t.dataset.next)||0;
+        details.setAttribute("data-start", String(next));
+        details.innerHTML = makeSetDetailsHTML(s, next, 20);
+      }
+      if (t.dataset.action === "add-one"){
+        const id = t.dataset.id;
+        if (!id) return;
+        try{
+          t.textContent = "Adding…"; t.classList.add("pointer-events-none","opacity-60");
+          const p = await fetchProductById(id);
+          const data = p.products ? p.products[0] : p; // handle either single or array shape
+          if (data && data.id){
+            const inv = { id:data.id, productName:data["product-name"], setName:data["console-name"],
+              prices:Object.fromEntries(Object.entries(data).filter(([k])=>/-price$/.test(k)||["loose-price","new-price","graded-price","cib-price","manual-only-price","bgs-10-price","condition-17-price","condition-18-price"].includes(k))),
+              qty:1, costBasisCents:0, note:"", gradeKey:"loose-price" };
+            state.inventory.push(inv); logDailySnapshot(); updateStats(); renderInventory(); renderSets();
+          } else { alert("Could not fetch product details."); }
+        } catch(e){ console.warn(e); alert("Failed to add item."); }
+      }
+      if (t.dataset.action === "add-visible"){
+        const ids = (t.dataset.ids||"").split(",").filter(Boolean);
+        t.textContent = "Adding…"; t.classList.add("pointer-events-none","opacity-60");
+        for (const id of ids){
+          try{
+            const p = await fetchProductById(id);
+            const data = p.products ? p.products[0] : p;
+            if (data && data.id){
+              const inv = { id:data.id, productName:data["product-name"], setName:data["console-name"],
+                prices:Object.fromEntries(Object.entries(data).filter(([k])=>/-price$/.test(k)||["loose-price","new-price","graded-price","cib-price","manual-only-price","bgs-10-price","condition-17-price","condition-18-price"].includes(k))),
+                qty:1, costBasisCents:0, note:"", gradeKey:"loose-price" };
+              // avoid duplicates by id in this collection
+              if (!state.inventory.some(it => String(it.id)===String(data.id))) state.inventory.push(inv);
+            }
+          } catch {}
+        }
+        logDailySnapshot(); updateStats(); renderInventory(); renderSets();
+      }
+    });
   });
 }
 
-// --- CSV helpers (existing) ---
+// --- CSV helpers ---
 const CSV_HEADERS = ["id","productName","setName","qty","gradeKey","costBasis","loose-price","graded-price","new-price","cib-price","manual-only-price","bgs-10-price","condition-17-price","condition-18-price","note"];
 function toCSVValue(v){ if (v == null) return ""; const s = String(v); if (/[\",\\n]/.test(s)) return `"${s.replace(/"/g,'""')}"`; return s; }
 function buildCSV(rows){ const lines = []; lines.push(CSV_HEADERS.join(",")); for (const r of rows){ const vals = CSV_HEADERS.map(h => toCSVValue(r[h])); lines.push(vals.join(",")); } return lines.join("\\n"); }
