@@ -15,8 +15,10 @@
     .glass { background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,.08); }
     .chip { border:1px solid rgba(255,255,255,.15); background: rgba(255,255,255,.06); }
     .price { font-variant-numeric: tabular-nums; }
+    /* Wrap fix for long titles/sets without changing the look */
+    .wrap-anywhere{overflow-wrap:anywhere;word-break:break-word;hyphens:auto}
   </style>
-  <!-- Chart.js CDN (for value history charts) -->
+  <!-- Chart.js for value history -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body class="min-h-screen">
@@ -37,9 +39,7 @@
         <a href="#inventory" class="hover:text-white">Inventory</a>
         <a href="#watchlist" class="hover:text-white">Watchlist</a>
       </nav>
-      <button id="open-settings" title="Settings" class="ml-4 text-slate-300 hover:text-white">
-        ⚙️
-      </button>
+      <button id="open-settings" title="Settings" class="ml-4 text-slate-300 hover:text-white">⚙️</button>
     </div>
   </header>
 

@@ -1,6 +1,4 @@
-/* CardTrack Pro — Inventory Value History + Charts
- * Keeps UI style intact. Adds daily snapshots and a chart toggle.
- */
+/* CardTrack Pro — History build + wrap fix (no UI change) */
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 const fmtUSD = (cents) => (cents==null?0:cents/100).toLocaleString(undefined,{style:"currency",currency:"USD"});
@@ -8,46 +6,34 @@ const fmtUSD = (cents) => (cents==null?0:cents/100).toLocaleString(undefined,{st
 const STORAGE_KEYS = {
   INVENTORY: "ctp.inventory.v1",
   WATCH: "ctp.watchlist.v1",
-  HISTORY: "ctp.history.v1", // [{ts, estCents, costCents}]
+  HISTORY: "ctp.history.v1",
 };
 
-const state = {
-  inventory: [],
-  watchlist: [],
-  history: [],
-  chart: null,
-};
+const state = { inventory: [], watchlist: [], history: [], chart: null };
 
-function todayISO(d=new Date()) {
-  return d.toISOString().slice(0,10);
-}
+function todayISO(d=new Date()) { return d.toISOString().slice(0,10); }
 
-// ---- Load/Save ----
+// Load/Save
 function loadState() {
   try {
     state.inventory = JSON.parse(localStorage.getItem(STORAGE_KEYS.INVENTORY) || "[]");
     state.watchlist = JSON.parse(localStorage.getItem(STORAGE_KEYS.WATCH) || "[]");
     state.history = JSON.parse(localStorage.getItem(STORAGE_KEYS.HISTORY) || "[]");
-  } catch {
-    state.inventory = []; state.watchlist=[]; state.history=[];
-  }
-  logDailySnapshot(); // ensure we have today's point
-  updateStats();
-}
-
-function saveState() {
-  localStorage.setItem(STORAGE_KEYS.INVENTORY, JSON.stringify(state.inventory));
-  localStorage.setItem(STORAGE_KEYS.WATCH, JSON.stringify(state.watchlist));
-  // Update snapshot after state changes
+  } catch { state.inventory=[]; state.watchlist=[]; state.history=[]; }
   logDailySnapshot();
   updateStats();
 }
-
+function saveState() {
+  localStorage.setItem(STORAGE_KEYS.INVENTORY, JSON.stringify(state.inventory));
+  localStorage.setItem(STORAGE_KEYS.WATCH, JSON.stringify(state.watchlist));
+  logDailySnapshot();
+  updateStats();
+}
 function saveHistory() {
   localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(state.history));
 }
 
-// ---- Calculations ----
+// Totals
 function estimateItemValue(it) {
   const prices = it.prices || {};
   const grade = it.gradeKey || "loose-price";
@@ -55,62 +41,48 @@ function estimateItemValue(it) {
   if (cents == null) cents = prices["loose-price"];
   return (Number(cents)||0) * (Number(it.qty)||1);
 }
-
 function totals() {
   const count = state.inventory.reduce((a,it)=>a+(Number(it.qty)||0),0);
   const est = state.inventory.reduce((a,it)=>a+estimateItemValue(it),0);
   const cost = state.inventory.reduce((a,it)=>a+(Number(it.costBasisCents)||0),0);
   return { count, est, cost, pl: est - cost };
 }
-
 function updateStats() {
   const t = totals();
   $("#stat-count").textContent = Number(t.count||0).toLocaleString();
   $("#stat-value").textContent = fmtUSD(t.est);
   $("#stat-cost").textContent = fmtUSD(t.cost);
   $("#stat-pl").textContent = fmtUSD(t.pl);
-  renderChart(); // keep chart synced
+  renderChart();
 }
 
-// ---- History ----
+// History
 function logDailySnapshot() {
   const t = totals();
   const last = state.history[state.history.length-1];
   const ts = new Date();
   if (!last || last.date !== todayISO(ts)) {
     state.history.push({ date: todayISO(ts), ts: ts.toISOString(), estCents: t.est, costCents: t.cost });
-    // keep at most 730 days (~2 years) for lightweight storage
     if (state.history.length > 730) state.history = state.history.slice(-730);
     saveHistory();
-  } else {
-    // update today's point live
-    last.estCents = t.est; last.costCents = t.cost; saveHistory();
-  }
+  } else { last.estCents = t.est; last.costCents = t.cost; saveHistory(); }
 }
 
-// ---- Chart ----
+// Chart
 function renderChart() {
-  const canvas = $("#valueChart");
-  if (!canvas) return;
-
+  const canvas = $("#valueChart"); if (!canvas) return;
   const labels = state.history.map(p => p.date);
   const est = state.history.map(p => p.estCents/100);
   const cost = state.history.map(p => p.costCents/100);
-
-  // Lazy-init Chart
   if (!state.chart) {
     state.chart = new Chart(canvas, {
       type: "line",
-      data: {
-        labels,
-        datasets: [
-          { label: "Est. Value", data: est, tension: 0.25 },
-          { label: "Cost Basis", data: cost, tension: 0.25 },
-        ]
-      },
+      data: { labels, datasets: [
+        { label: "Est. Value", data: est, tension: 0.25 },
+        { label: "Cost Basis", data: cost, tension: 0.25 },
+      ]},
       options: {
-        responsive: true,
-        maintainAspectRatio: false,
+        responsive: true, maintainAspectRatio: false,
         interaction: { mode: "index", intersect: false },
         plugins: {
           legend: { labels: { color: "#e7eaf3" } },
@@ -130,7 +102,7 @@ function renderChart() {
   }
 }
 
-// ---- Search & Inventory (unchanged logic, abbreviated to essential parts) ----
+// Search
 async function doSearch(q) {
   const res = await fetch(`/.netlify/functions/prices?type=products&q=${encodeURIComponent(q)}`);
   if (!res.ok) { $("#results").innerHTML = `<div class="col-span-full text-red-300">Search failed: ${res.status}</div>`; return; }
@@ -138,14 +110,12 @@ async function doSearch(q) {
   const products = data.products || (data.status === "success" ? [data] : []);
   renderResults(products);
 }
-
 function priceKeysDisplay(obj) {
   const preferred = ["loose-price","graded-price","manual-only-price","new-price","cib-price","bgs-10-price","condition-17-price","condition-18-price"];
   const keys = preferred.filter(k => obj[k] != null);
   Object.keys(obj).forEach(k => { if (/-price$/.test(k) && !keys.includes(k)) keys.push(k); });
   return keys;
 }
-
 function renderResults(products) {
   const container = $("#results");
   container.innerHTML = "";
@@ -159,12 +129,12 @@ function renderResults(products) {
     const card = document.createElement("div");
     card.className = "glass rounded-2xl p-4";
     card.innerHTML = `
-      <div class="flex items-start justify-between gap-3">
-        <div>
-          <div class="text-sm text-slate-300/70">${p["console-name"]||""}</div>
-          <div class="font-semibold">${p["product-name"]||""}</div>
+      <div class="flex items-start justify-between gap-3 min-w-0">
+        <div class="min-w-0">
+          <div class="text-sm text-slate-300/70 wrap-anywhere">${p["console-name"]||""}</div>
+          <div class="font-semibold wrap-anywhere">${p["product-name"]||""}</div>
         </div>
-        <button class="rounded-lg px-3 py-1 bg-sky-400/20 border border-sky-400/40 text-sm hover:bg-sky-400/30" data-id="${p.id}" data-json='${JSON.stringify(p).replaceAll("'","&apos;")}'>
+        <button class="shrink-0 rounded-lg px-3 py-1 bg-sky-400/20 border border-sky-400/40 text-sm hover:bg-sky-400/30" data-id="${p.id}" data-json='${JSON.stringify(p).replaceAll("'","&apos;")}'>
           + Add
         </button>
       </div>
@@ -188,6 +158,7 @@ function renderResults(products) {
   });
 }
 
+// Inventory
 function renderInventory() {
   const list = $("#inventory-list");
   list.innerHTML = "";
@@ -201,12 +172,12 @@ function renderInventory() {
     const row = document.createElement("div");
     row.className = "glass rounded-2xl p-4";
     row.innerHTML = `
-      <div class="flex items-start justify-between gap-3">
-        <div>
-          <div class="text-sm text-slate-300/70">${it.setName||""}</div>
-          <div class="font-semibold">${it.productName||""}</div>
+      <div class="flex items-start justify-between gap-3 min-w-0">
+        <div class="min-w-0">
+          <div class="text-sm text-slate-300/70 wrap-anywhere">${it.setName||""}</div>
+          <div class="font-semibold wrap-anywhere">${it.productName||""}</div>
         </div>
-        <button class="text-slate-300/80 hover:text-red-300" data-action="remove">✖</button>
+        <button class="shrink-0 text-slate-300/80 hover:text-red-300" data-action="remove" title="Remove">✖</button>
       </div>
       <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
         <label class="chip rounded-xl px-3 py-2 flex items-center gap-2">
@@ -226,7 +197,7 @@ function renderInventory() {
           <div class="font-semibold price">${fmtUSD(estimateItemValue(it))}</div>
         </div>
       </div>
-      <textarea placeholder="Notes" data-field="note" class="mt-3 w-full chip rounded-xl px-3 py-2 bg-transparent outline-none">${it.note||""}</textarea>`;
+      <textarea placeholder="Notes (purchase details, cert #, comps)" data-field="note" class="mt-3 w-full chip rounded-xl px-3 py-2 bg-transparent outline-none wrap-anywhere">${it.note||""}</textarea>`;
     list.appendChild(row);
 
     row.querySelector('[data-field="qty"]').addEventListener("input", (e)=>{ it.qty=Number(e.target.value||1); saveState(); renderInventory(); });
@@ -237,7 +208,7 @@ function renderInventory() {
   });
 }
 
-// ---- UI wiring ----
+// Wire
 document.addEventListener("DOMContentLoaded", () => {
   loadState();
   renderInventory();
@@ -262,7 +233,6 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch { alert("Failed to import JSON"); }
   });
 
-  // Toggle chart panel (keeps look consistent)
   $("#toggle-history")?.addEventListener("click", () => {
     const card = $("#history-card");
     if (!card) return;

@@ -1,1 +1,1 @@
-Adds value history tracking + charts while keeping the existing UI style. See index.html (Chart panel) and app.js (history + chart code).
+Wrap fix + history build. Replace your files and deploy. No visual changes; only text wrapping and layout resilience added.
