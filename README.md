@@ -1,1 +1,1 @@
-Wrap fix + history build. Replace your files and deploy. No visual changes; only text wrapping and layout resilience added.
+Grade select overflow fix + human labels. Replace files and deploy. Visual design unchanged.
