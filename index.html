@@ -18,8 +18,8 @@
     .wrap-anywhere{overflow-wrap:anywhere;word-break:break-word;hyphens:auto}
     .linkish{ color: rgba(255,255,255,.8); font-size: 11px; }
     .linkish:hover{ color: #fff; text-decoration: underline; }
-    .badge{position:absolute; top:-6px; right:-6px; font-size:10px; background:#ef4444; color:#fff; border-radius:999px; padding:0 6px; line-height:16px; height:16px;}
-    .panel{ position:absolute; right:0; top:120%; width:360px; max-height:60vh; overflow:auto; }
+    .bar { height: 6px; border-radius: 9999px; background: rgba(255,255,255,.08); overflow: hidden; }
+    .bar > div { height: 100%; background: rgba(125, 211, 252, .7); }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -41,20 +41,7 @@
         <a href="#inventory" class="hover:text-white">Inventory</a>
         <a href="#watchlist" class="hover:text-white">Watchlist</a>
       </nav>
-      <div class="relative ml-2">
-        <button id="open-alerts" title="Alerts" class="ml-2 text-slate-300 hover:text-white relative">🔔<span id="alert-badge" class="badge hidden">0</span></button>
-        <div id="alerts-panel" class="panel hidden glass rounded-2xl p-3 text-sm">
-          <div class="flex items-center justify-between">
-            <div class="font-semibold">Alerts</div>
-            <div class="flex items-center gap-2">
-              <a id="refresh-alerts" class="linkish cursor-pointer">Refresh</a>
-              <a id="clear-alerts" class="linkish cursor-pointer">Clear</a>
-            </div>
-          </div>
-          <div id="alerts-list" class="mt-2 space-y-2"></div>
-        </div>
-      </div>
-      <button id="open-settings" title="Settings" class="ml-2 text-slate-300 hover:text-white">⚙️</button>
+      <button id="open-settings" title="Settings" class="ml-4 text-slate-300 hover:text-white">⚙️</button>
     </div>
   </header>
 
@@ -63,7 +50,7 @@
       <div class="flex flex-col lg:flex-row gap-4 items-start">
         <div class="flex-1 glass rounded-2xl p-5">
           <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight">Search card prices</h1>
-          <p class="text-slate-300/80 mt-1">Live pricing via SportsCardsPro — search player, year, set, or card number. Add or watch with a click.</p>
+          <p class="text-slate-300/80 mt-1">Live pricing via SportsCardsPro — search player, year, set, or card number. Add cards to your inventory with one click.</p>
           <form id="search-form" class="mt-4 flex items-stretch gap-2">
             <input id="q" name="q" placeholder="e.g., 2017 Patrick Mahomes rookie, 1986 Fleer Jordan #57, 2020 Prizm Burrow" class="flex-1 rounded-xl bg-white/5 border border-white/10 px-4 py-3 outline-none focus:ring-2 focus:ring-sky-400/50" autocomplete="off">
             <button class="rounded-xl px-5 font-semibold bg-sky-400/20 border border-sky-400/40 hover:bg-sky-400/30">Search</button>
@@ -81,6 +68,7 @@
                 <option>Trade</option>
               </select>
               <button id="toggle-history" class="text-xs rounded-lg px-2 py-1 bg-white/5 border border-white/10 hover:bg-white/10">History</button>
+              <button id="toggle-analytics" class="text-xs rounded-lg px-2 py-1 bg-white/5 border border-white/10 hover:bg-white/10">Analytics</button>
               <button id="toggle-sets" class="text-xs rounded-lg px-2 py-1 bg-white/5 border border-white/10 hover:bg-white/10">Sets</button>
             </div>
           </div>
@@ -107,8 +95,49 @@
               <canvas id="valueChart" height="200"></canvas>
             </div>
           </div>
+          <div id="analytics-card" class="mt-3 hidden">
+            <div class="chip rounded-2xl p-3 space-y-3">
+              <div class="grid grid-cols-2 gap-3 text-sm">
+                <div class="chip rounded-xl p-3">
+                  <div class="text-slate-300/70">Market Value</div>
+                  <div id="pnl-market" class="text-xl font-bold price">$0.00</div>
+                </div>
+                <div class="chip rounded-xl p-3">
+                  <div class="text-slate-300/70">Holdings Cost</div>
+                  <div id="pnl-cost" class="text-xl font-bold price">$0.00</div>
+                </div>
+                <div class="chip rounded-xl p-3">
+                  <div class="text-slate-300/70">Unrealized P/L</div>
+                  <div id="pnl-unreal" class="text-xl font-bold price">$0.00</div>
+                </div>
+                <div class="chip rounded-xl p-3">
+                  <div class="text-slate-300/70">Realized P/L</div>
+                  <div id="pnl-real" class="text-xl font-bold price">$0.00</div>
+                </div>
+                <div class="chip rounded-xl p-3 col-span-2">
+                  <div class="text-slate-300/70">ROI (Holdings)</div>
+                  <div id="pnl-roi" class="text-xl font-bold">0.0%</div>
+                </div>
+              </div>
+              <div class="grid grid-cols-1 gap-3">
+                <div class="chip rounded-xl p-3">
+                  <div class="font-semibold text-sm mb-2">Allocation by Set</div>
+                  <canvas id="allocChart" height="200"></canvas>
+                </div>
+                <div class="chip rounded-xl p-3">
+                  <div class="font-semibold text-sm mb-2">Top Winners / Losers</div>
+                  <canvas id="winnersChart" height="220"></canvas>
+                </div>
+              </div>
+              <div class="flex items-center justify-end gap-3 text-xs">
+                <a id="export-ledger" class="linkish cursor-pointer">Export Ledger</a>
+                <a id="import-ledger" class="linkish cursor-pointer">Import Ledger</a>
+                <input id="import-ledger-file" type="file" accept="application/json" class="hidden" />
+              </div>
+            </div>
+          </div>
           <div id="sets-card" class="mt-3 hidden">
-            <div class="chip rounded-xl p-3 space-y-2">
+            <div class="chip rounded-2xl p-3 space-y-2">
               <div class="flex items-center justify-between">
                 <div class="font-semibold text-sm">Tracked sets</div>
                 <a id="add-set" class="linkish cursor-pointer">+ Add</a>
@@ -144,7 +173,7 @@
     <section id="watchlist" class="space-y-3">
       <div class="flex items-center justify-between">
         <h2 class="text-xl font-bold">Watchlist</h2>
-        <div class="text-sm text-slate-300/70">Alert rules supported • Saved to cloud</div>
+        <div class="text-sm text-slate-300/70">Track potential pickups</div>
       </div>
       <div id="watch-list" class="grid md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
     </section>
